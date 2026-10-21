@@ -1,0 +1,5 @@
+{
+  "functions": {
+    "api/status.py": { "maxDuration": 60, "includeFiles": "ntes.py" }
+  }
+}

@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Live train 3D</title>
+<style>
+:root{--bg:#0f1318;--panel:#171d25;--fg:#e8edf2;--mut:#8b97a5;--a:#e0463c;--b:#3d8bfd;--ok:#4cc9a0;--warn:#f2b64a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:13px system-ui,sans-serif;display:grid;grid-template-columns:1fr 360px;height:100vh}
+@media(max-width:900px){body{grid-template-columns:1fr;grid-template-rows:55vh auto;height:auto}}
+#view{position:relative;min-height:300px}
+canvas{display:block;width:100%;height:100%}
+#side{background:var(--panel);padding:12px 14px;overflow:auto;max-height:100vh}
+h1{font-size:15px;margin:0 0 2px}h2{font-size:13px;margin:14px 0 6px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em}
+.card{border-left:4px solid;padding:6px 10px;margin:6px 0;background:#1d252f;border-radius:4px;line-height:1.5}
+.ca{border-color:var(--a)}.cb{border-color:var(--b)}
+input,select,button{background:#222b36;color:var(--fg);border:1px solid #33404f;border-radius:4px;padding:4px 6px;font:inherit}
+button{cursor:pointer}button:hover{background:#2c3846}
+input[type=range]{width:100%;padding:0}
+select{max-width:200px}
+.row{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:5px 0}
+.pill{display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;background:#2c3846}
+.ov{border:1px solid var(--warn);border-radius:6px;padding:8px;margin-top:6px;background:#2a2517}
+small{color:var(--mut)}
+#dist{position:absolute;left:50%;top:8px;transform:translateX(-50%);background:rgba(15,19,24,.82);border:1px solid #f2b64a;border-radius:8px;padding:5px 14px;text-align:center;line-height:1.35;pointer-events:none}#dist b{font-size:20px;color:#f2b64a}#dist small{color:#c9d4e0}
+#clock{position:absolute;left:10px;top:8px;font-size:15px;font-weight:600;text-shadow:0 1px 3px #000}
+table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:2px 4px;text-align:left;border-bottom:1px solid #26303b}
+</style></head><body>
+<div id="view"><div id="clock"></div><div id="dist"></div></div>
+<div id="side">
+<h1 id="ttl">Live train 3D</h1>
+<small id="sub">Enter two train numbers to track them live from NTES.</small>
+
+<h2>Trains</h2>
+<div class="row"><span id="lbA" style="width:48px"><b style="color:var(--a)">A</b></span><input id="na" placeholder="Train no." maxlength="5" size="7" inputmode="numeric"><select id="ia" title="Which run of this train"></select></div>
+<div class="row"><span id="lbB" style="width:48px"><b style="color:var(--b)">B</b></span><input id="nb" placeholder="Train no." maxlength="5" size="7" inputmode="numeric"><select id="ib" title="Which run of this train"></select></div>
+<div class="row"><button id="load">Load</button><small>Both runs are picked automatically (closest to each other); change them in the drop-downs.</small></div>
+<div id="feed" class="card" style="border-color:#555;font-size:12px"></div>
+<div class="row"><small>Extra delay what-if (min):</small> A <input id="dl1" type="number" value="0" step="5" style="width:64px"> B <input id="dl2" type="number" value="0" step="5" style="width:64px"></div>
+
+<h2>Time</h2>
+<div class="row"><button id="live">Live (IST now)</button><button id="jump">Jump: overtake / closest</button><button id="play">Pause</button>
+<select id="spd"><option value="0.016667">1× real-time</option><option value="1">1 min/s</option><option value="5">5 min/s</option><option value="15">15 min/s</option><option value="45">45 min/s</option></select></div>
+<input type="range" id="tl" min="0" max="1" step="1">
+
+<h2>Camera</h2><small>Scroll = zoom toward the cursor · drag = orbit · right-drag = pan · double-click a train = follow it, double-click the ground = re-centre</small>
+<div class="row"><button id="zin" title="Zoom in">＋</button><button id="zout" title="Zoom out">－</button><button data-cam="both">Frame both</button><button data-cam="over">Overview</button><select id="stsel"><option value="">Go to station…</option></select></div>
+<div class="row"><button id="fa" data-cam="a">Follow A</button><button id="fb" data-cam="b">Follow B</button></div>
+
+<h2>Sound</h2>
+<div class="row"><button id="snd">🔇 Sound: off</button><input type="range" id="vol" min="0" max="1.5" step="0.05" value="0.8" style="width:110px" title="Volume"></div>
+<div class="row"><button id="hornA">Horn A</button><button id="hornB">Horn B</button><label><input type="checkbox" id="ahorn" checked> auto-horn at non-stop stations</label></div>
+<small>Track sound = your track.mp3 (looped; volume and pitch follow the train's speed), horn = your horn.mp3; motor hum and brake squeal are synthesised. Loudness, muffling, stereo pan and Doppler follow the camera — zoom in close to a train to hear it. The horn is your horn.mp3 — <b>hold</b> a Horn button, or hold <b>H</b> for the nearer train.</small>
+
+<h2>Status</h2><div id="gap" class="card" style="border-color:#888"></div>
+<div id="st1" class="card ca"></div><div id="st2" class="card cb"></div>
+<div id="ov" class="ov">Waiting for data…</div>
+
+<h2>Shared stops (expected arrive–depart)</h2>
+<table><tr id="jth"></tr><tbody id="jt"></tbody></table>
+
+<p><small><b>Data notes.</b> Live data comes from NTES (enquiry.indianrail.gov.in) through <code>server.py</code>: actual/projected times per stop (* = projection), every non-stopping station, the last confirmed location and the coach list. Between NTES updates a train's position is extrapolated at ~85 km/h to its next stop, so it is an estimate, not GPS. Top speed per train is derived from its own timetable. Both trains are assumed to run the same direction along their shared route.</small></p>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+// ---------- state ----------
+const $=id=>document.getElementById(id);
+const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
+// A / B are just the two slots; everything else (name, route, stations, coaches, speeds) comes from NTES.
+const T={a:{key:"a",color:0xe0463c,delay:0,stops:[],vmax:110/60,z:0,title:"Train A",num:"",name:""},
+         b:{key:"b",color:0x3d8bfd,delay:0,stops:[],vmax:110/60,z:0,title:"Train B",num:"",name:""}};
+let NT=null;                       // latest NTES payload {a,b}
+let PAIR={ok:false,lo:0,hi:1000,off:0,stations:[]};   // shared route between the two trains (in train A's km)
+
+// ---------- time (minutes since an IST-midnight epoch; only used for counting) ----------
+const MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const E0=Date.UTC(2026,0,1)-5.5*3600e3;
+const nowMin=()=>(Date.now()-E0)/60000;
+function tmin(x){if(!x)return null;const m=x.match(/(\d\d):(\d\d) (\d\d)-(\w{3})/);if(!m)return null;const mi=MON.indexOf(m[4]);
+  const ny=new Date(Date.now()+5.5*3600e3).getUTCFullYear();let best=null;
+  for(const y of[ny-1,ny,ny+1]){const v=(Date.UTC(y,mi,+m[3],+m[1],+m[2])-5.5*3600e3-E0)/60000;if(best==null||Math.abs(v-nowMin())<Math.abs(best-nowMin()))best=v}
+  return best}
+const p2=n=>String(n).padStart(2,"0");
+function fmtT(m){const d=new Date(E0+Math.round(m)*60000+5.5*3600e3);return `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`}
+function fmt(m){const d=new Date(E0+Math.round(m)*60000+5.5*3600e3);return `${d.getUTCDate()} ${MON[d.getUTCMonth()]} ${fmtT(m)}`}
+const tc=x=>x.replace(/\b(\w+)\b/g,w=>(w.length<=3&&!/[AEIOUaeiou]/.test(w))?w.toUpperCase():w[0].toUpperCase()+w.slice(1).toLowerCase()).replace(/\s+(JN|Jn|Junction|JUNCTION)$/i,"");
+
+// ---------- movement model ----------
+function pos(tr,t){const S=tr.stops,x=t-tr.delay;if(!S.length)return{c:0,st:"notstarted",i:0,v:0};
+  const f=S[0];if(x<=f.dep)return{c:f.ch,st:"notstarted",i:0,v:0};
+  for(let i=0;i<S.length;i++){const s=S[i];
+    if(x>=s.arr&&x<=s.dep)return{c:s.ch,st:i==S.length-1?"done":"halt",i,v:0};
+    const n=S[i+1];if(!n)break;
+    if(x>s.dep&&x<n.arr){const e=x-s.dep,P=s.pass?linProf(n.ch-s.ch,n.arr-s.dep):prof(n.ch-s.ch,n.arr-s.dep,tr.vmax);
+      const r=P.at(e);return{c:s.ch+r.s,st:"run",i,v:r.v*60,vpk:P.v*60}}}
+  return{c:S[S.length-1].ch,st:"done",i:S.length-1,v:0}}
+// Trapezoid speed profile (accel/cruise/brake) covering D km in exactly T min. Units km, min. 0.4 m/s^2 = 1.44 km/min^2.
+const A=1.44,_pc=new Map();
+function linProf(D,T){return{v:D/T,lin:true,at(e){return{s:D*e/T,v:D/T}}}}
+function prof(D,T,vmax){const key=D+"|"+T+"|"+vmax;if(_pc.has(key))return _pc.get(key);
+  let v,ta,lin=false;const disc=T*T-4*D/A;
+  if(disc<0){lin=true;v=D/T;ta=0}else{v=A*(T-Math.sqrt(disc))/2;ta=v/A}
+  const P={v,ta,lin,at(e){if(lin)return{s:D*e/T,v:D/T};
+    if(e<ta)return{s:.5*A*e*e,v:A*e};
+    if(e>T-ta){const r=T-e;return{s:D-.5*A*r*r,v:A*r}}
+    return{s:v*v/(2*A)+v*(e-ta),v}}};
+  _pc.set(key,P);return P}
+
+// ---------- NTES -> stop list ----------
+// Actual/projected times where NTES has them, schedule + last delay otherwise, anchored on the last confirmed
+// location (which may be a non-stopping station). Nothing here is specific to any train.
+function ntesBuild(d,mp){const stops=[];let ld=0,prev=-1e9;
+  for(const r of d.rows){if(r.k!="stop")continue;
+    const sa=tmin(r.sa),aa=tmin(r.aa),sd=tmin(r.sd),ad=tmin(r.ad);let arr,dep;
+    if(sa==null){dep=ad??sd;arr=dep;ld=(ad!=null&&sd!=null)?ad-sd:0}
+    else{arr=aa??sa+ld;if(aa!=null)ld=aa-sa;if(sd==null)dep=arr;else{dep=ad??sd+ld;if(ad!=null)ld=ad-sd}}
+    arr=Math.max(arr,prev);dep=Math.max(dep,arr);prev=dep;
+    stops.push({n:tc(r.name),c:r.code,ch:mp(r.km),arr,dep,sa,sd,known:aa!=null||ad!=null,proj:/\*/.test((r.aa||"")+(r.ad||""))})}
+  // top speed implied by the timetable (fastest scheduled stop-to-stop average, with headroom)
+  let mx=0;for(let i=1;i<stops.length;i++){const a=stops[i-1],b=stops[i];if(a.sd!=null&&b.sa!=null&&b.sa-a.sd>5)mx=Math.max(mx,(b.ch-a.ch)/(b.sa-a.sd)*60)}
+  const vmax=(mx?clamp(mx*1.15,90,160):110)/60;
+  const cu=d.cur;let anchor=-1;
+  if(cu){const ct=tmin(cu.time),row=d.rows.find(r=>r.code==cu.code);
+    if(row&&ct!=null){const j=stops.findIndex(x=>x.c==cu.code);
+      if(j>=0){const x=stops[j];if(cu.kind=="Departed"){x.dep=ct;x.arr=Math.min(x.arr,ct)}else{x.arr=ct;x.dep=Math.max(x.dep,ct)}anchor=j}
+      else{const ch=mp(row.km);let k=stops.findIndex(x=>x.ch>ch);if(k<0)k=stops.length;stops.splice(k,0,{n:tc(row.name),c:row.code,ch,arr:ct,dep:ct,pass:true});anchor=k}
+      // nothing after the last confirmed point can have happened yet: keep a physically possible run time to each next stop
+      let dl=0;const x0=stops[anchor];if(x0.sd!=null)dl=x0.dep-x0.sd;else if(anchor>0){const q=stops[anchor-1];dl=q.sd!=null?q.dep-q.sd:0}
+      for(let i=anchor+1;i<stops.length;i++){const a=stops[i-1],b=stops[i];let mn=a.dep+(b.ch-a.ch)/(i==anchor+1?85:110)*60;
+        if(i==anchor+1)mn=Math.max(mn,nowMin()+1);   // next stop has not reported yet
+        if(!b.known&&b.sa!=null){   // NTES has no estimate: first stop from running time, later ones schedule + carried delay
+          b.arr=i==anchor+1?mn:Math.max(b.sa+dl,mn);b.dep=Math.max(b.sd!=null?b.sd+(b.arr-b.sa):b.arr,b.arr)}
+        else if(b.arr<mn){const sh=mn-b.arr;b.arr+=sh;b.dep+=sh}
+        if(b.sd!=null)dl=b.dep-b.sd}}}
+  return{stops,anchor,cur:cu,updated:d.updated,vmax}}
+
+// shared route between the two trains. Stations both list are matched by code; where the routes diverge (km spacing
+// between consecutive shared stations disagrees) they split into blocks and the longest block is used. B's km is
+// mapped onto A's km system by interpolating between the shared stations, so small per-train km differences vanish.
+function makePair(A,B){const ka=new Map(A.rows.map(r=>[r.code,r])),kb=new Map(B.rows.map(r=>[r.code,r]));
+  let sh=[...ka.keys()].filter(c=>kb.has(c)).map(c=>({code:c,a:ka.get(c).km,b:kb.get(c).km})).sort((x,y)=>x.a-y.a);
+  sh=sh.filter((x,i)=>i==0||(x.b>sh[i-1].b&&x.a>sh[i-1].a));            // keep monotonic matches only
+  const blocks=[];let cur=[];
+  for(const x of sh){const p=cur[cur.length-1];
+    if(p){const dA=x.a-p.a,dB=x.b-p.b;if(Math.abs(dA-dB)>Math.max(10,.1*dA)){blocks.push(cur);cur=[]}}
+    cur.push(x)}
+  if(cur.length)blocks.push(cur);
+  const best=blocks.sort((x,y)=>(y[y.length-1].a-y[0].a)-(x[x.length-1].a-x[0].a))[0];
+  if(!best||best.length<2)return{ok:false,lo:0,hi:1000,off:0,stations:[],mapB:k=>k};
+  const mapB=q=>{const f=best[0],l=best[best.length-1];if(q<=f.b)return f.a+(q-f.b);if(q>=l.b)return l.a+(q-l.b);
+    let i=1;while(best[i].b<q)i++;const p=best[i-1],r=best[i];return p.a+(q-p.b)*(r.a-p.a)/(r.b-p.b)};
+  const st=best.map(x=>({code:x.code,name:tc(ka.get(x.code).name),km:x.a,big:ka.get(x.code).k=="stop"||kb.get(x.code).k=="stop"}));
+  return{ok:true,lo:best[0].a,hi:best[best.length-1].a,off:Math.round(best[0].b-best[0].a),stations:st,mapB}}
+const inCorr=c=>c>=PAIR.lo-.001&&c<=PAIR.hi+.001;
+
+// ---------- overtake analysis (generic: first time one train passes the other inside the shared route) ----------
+function window_(){let t0=1e12,t1=-1e12;for(const k of["a","b"]){const S=T[k].stops;if(S.length){t0=Math.min(t0,S[0].dep+T[k].delay);t1=Math.max(t1,S[S.length-1].arr+T[k].delay)}}return[t0,t1]}
+function findOvertake(t0,t1,step){let prev=null;
+  for(let t=t0;t<=t1;t+=step){const a=pos(T.a,t),b=pos(T.b,t);
+    if(a.st=="notstarted"||b.st=="notstarted"||a.st=="done"||b.st=="done"||!inCorr(a.c)||!inCorr(b.c)){prev=null;continue}
+    const d=a.c-b.c;if(prev!==null&&((prev<0&&d>=0)||(prev>0&&d<=0)))return{t,c:a.c,passer:d>=0?"a":"b",as:a.st,bs:b.st};prev=d}
+  return null}
+let hintCache={t:0,v:null,sig:""};
+function minDelayHint(){const sig=T.a.stops.length+"|"+T.b.stops.length+"|"+(T.a.stops[0]||{}).dep+"|"+(T.b.stops[0]||{}).dep+"|"+T.a.delay+"|"+T.b.delay;
+  if(hintCache.sig===sig&&Date.now()-hintCache.t<60000)return hintCache.v;
+  const[t0,t1]=window_();let lead=null;
+  for(let t=t0;t<=t1;t+=5){const a=pos(T.a,t),b=pos(T.b,t);if(a.st!="notstarted"&&b.st!="notstarted"&&a.st!="done"&&b.st!="done"&&inCorr(a.c)&&inCorr(b.c)){lead=a.c>b.c?"a":"b";break}}
+  let res=null;if(lead){const d0=T[lead].delay;
+    for(let d=d0;d<=d0+600;d+=5){T[lead].delay=d;if(findOvertake(t0,t1+d+600,3)){res={lead,min:d-d0};break}}T[lead].delay=d0}
+  hintCache={t:Date.now(),v:res,sig};return res}
+
+// ---------- 3D (real scale, metres, floating origin) ----------
+const view=document.getElementById("view");
+const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));view.appendChild(renderer.domElement);
+const scene=new THREE.Scene();scene.fog=new THREE.Fog(0x8fb8e8,2000,9000);
+const cam=new THREE.PerspectiveCamera(50,1,.5,4e6);
+const ctl=new THREE.OrbitControls(cam,renderer.domElement);ctl.enableDamping=true;ctl.enableZoom=false;ctl.maxPolarAngle=Math.PI*.495;ctl.minDistance=6;ctl.maxDistance=900000;
+const hemi=new THREE.HemisphereLight(0xcfe3ff,0x334433,.8);scene.add(hemi);
+const sun=new THREE.DirectionalLight(0xffffff,.8);sun.position.set(300,500,200);scene.add(sun);
+const X=c=>c*1000;let O=0;                       // world metres; O = floating origin
+const M=(c,o={})=>new THREE.MeshLambertMaterial(Object.assign({color:c},o));
+const MB=(c,o={})=>new THREE.MeshBasicMaterial(Object.assign({color:c},o));
+function tex(w,h,draw){const c=document.createElement("canvas");c.width=w;c.height=h;draw(c.getContext("2d"),w,h);const t=new THREE.CanvasTexture(c);t.anisotropy=4;return t}
+function label(txt,col){const t=tex(512,96,(x,w,h)=>{x.font="700 56px system-ui";x.textAlign="center";x.lineWidth=8;x.strokeStyle="rgba(0,0,0,.75)";x.strokeText(txt,w/2,66);x.fillStyle=col;x.fillText(txt,w/2,66)});
+  const s=new THREE.Sprite(new THREE.SpriteMaterial({map:t,transparent:true,depthTest:false,fog:false}));return s}
+
+// ground (field patchwork) + far ground
+const gtex=tex(256,256,(x)=>{const cols=["#4d6b35","#5a7a3a","#6f7f3f","#8a7a45","#46602f","#7d8b47"];let r=7;const rnd=()=>(r=(r*16807)%2147483647)/2147483647;
+  for(let i=0;i<8;i++)for(let j=0;j<8;j++){x.fillStyle=cols[Math.floor(rnd()*cols.length)];x.fillRect(i*32,j*32,32,32)}
+  x.strokeStyle="rgba(0,0,0,.07)";for(let i=0;i<256;i+=4){x.beginPath();x.moveTo(i,0);x.lineTo(i,256);x.stroke()}});
+gtex.wrapS=gtex.wrapT=THREE.RepeatWrapping;gtex.repeat.set(2000,2000);
+const ground=new THREE.Mesh(new THREE.PlaneGeometry(400000,400000),new THREE.MeshLambertMaterial({map:gtex}));ground.rotation.x=-Math.PI/2;scene.add(ground);
+const farGround=new THREE.Mesh(new THREE.PlaneGeometry(8e6,8e6),M(0x4f6b3a));farGround.rotation.x=-Math.PI/2;farGround.position.y=-.8;scene.add(farGround);
+
+// stars
+const stars=(()=>{const n=700,p=new Float32Array(n*3);for(let i=0;i<n;i++){const u=Math.random()*2-1,a=Math.random()*6.283,r=Math.sqrt(1-u*u),R=2e6;p[i*3]=R*r*Math.cos(a);p[i*3+1]=Math.abs(R*u)*.9+1e4;p[i*3+2]=R*r*Math.sin(a)}
+  const g=new THREE.BufferGeometry();g.setAttribute("position",new THREE.BufferAttribute(p,3));const s=new THREE.Points(g,new THREE.PointsMaterial({color:0xffffff,size:2.5,sizeAttenuation:false,transparent:true,fog:false}));scene.add(s);return s})();
+
+// track: two tracks (main z=0, loop z=4.6), ballast, sleepers, rails
+const TL=3000,SP=.65,GAUGE=1.676,TZ=[0,4.6];
+const trackG=new THREE.Group();scene.add(trackG);
+{const n=Math.floor(TL/SP);const sl=new THREE.InstancedMesh(new THREE.BoxGeometry(.26,.2,2.6),M(0x8d8a85),n*2);const m=new THREE.Matrix4();let k=0;
+ TZ.forEach(z=>{for(let i=0;i<n;i++){m.setPosition(-TL/2+i*SP,.45,z);sl.setMatrixAt(k++,m)}});trackG.add(sl);
+ TZ.forEach(z=>{const b=new THREE.Mesh(new THREE.BoxGeometry(TL,.4,4.4),M(0x6e6862));b.position.set(0,.2,z);trackG.add(b);
+  [-1,1].forEach(s=>{const r=new THREE.Mesh(new THREE.BoxGeometry(TL,.17,.07),M(0xc3c7cc));r.position.set(0,.64,z+s*GAUGE/2);trackG.add(r);
+   const f=new THREE.Mesh(new THREE.BoxGeometry(TL,.03,.14),M(0xaaaeb3));f.position.set(0,.56,z+s*GAUGE/2);trackG.add(f)})})}
+// overhead electrification: portal masts + contact & messenger wire
+const catG=new THREE.Group();scene.add(catG);const MS=60;
+{const n=Math.floor(TL/MS);const post=new THREE.InstancedMesh(new THREE.BoxGeometry(.3,9,.3),M(0x777c82),n*2),beam=new THREE.InstancedMesh(new THREE.BoxGeometry(.2,.35,24),M(0x777c82),n);
+ let k=0;const m=new THREE.Matrix4();
+ for(let i=0;i<n;i++){const x=-TL/2+i*MS;[-10.5,13.1].forEach(z=>{m.setPosition(x,4.5,z);post.setMatrixAt(k++,m)});m.setPosition(x,8.8,1.3);beam.setMatrixAt(i,m)}
+ catG.add(post,beam);
+ TZ.forEach(z=>{const w=new THREE.Mesh(new THREE.BoxGeometry(TL,.05,.05),MB(0x222222));w.position.set(0,6.22,z);catG.add(w);const mw=new THREE.Mesh(new THREE.BoxGeometry(TL,.04,.04),MB(0x2a2a2a));mw.position.set(0,7.3,z);catG.add(mw)})}
+// trees
+const treeG=new THREE.Group();scene.add(treeG);const TP=1500;
+{let r=11;const rnd=()=>(r=(r*16807)%2147483647)/2147483647;const per=45,reps=4;
+ const trunk=new THREE.InstancedMesh(new THREE.CylinderGeometry(.25,.35,3,6),M(0x5a4030),per*reps),crown=new THREE.InstancedMesh(new THREE.SphereGeometry(2.6,8,6),M(0x2f5a2c),per*reps);
+ const base=[];for(let i=0;i<per;i++){const side=rnd()<.5?-1:1;base.push([rnd()*TP,side*(26+rnd()*140),.8+rnd()*1.1])}
+ const m=new THREE.Matrix4(),q=new THREE.Quaternion(),pv=new THREE.Vector3(),sv=new THREE.Vector3();let k=0;
+ for(let rp=0;rp<reps;rp++)base.forEach(([bx,z,s])=>{const x=-2*TP+rp*TP+bx;sv.set(s,s,s);pv.set(x,1.5*s,z);m.compose(pv,q,sv);trunk.setMatrixAt(k,m);pv.set(x,4.4*s,z);m.compose(pv,q,sv);crown.setMatrixAt(k++,m)});
+ treeG.add(trunk,crown)}
+// route line (only visible when zoomed far out)
+const routeLine=new THREE.Mesh(new THREE.BoxGeometry(1,1,1),MB(0x9aa7b8));scene.add(routeLine);
+
+
+// ---- trains ----
+function coachSide(base,stripe,lower){return tex(1024,128,(x,w,h)=>{x.fillStyle=base;x.fillRect(0,0,w,h);x.fillStyle=lower;x.fillRect(0,h*.78,w,h*.22);x.fillStyle=stripe;x.fillRect(0,h*.70,w,h*.05);x.fillRect(0,h*.12,w,h*.02);
+  for(let i=0;i<10;i++){const wx=80+i*86;x.fillStyle="#0d1c2e";x.fillRect(wx,h*.2,60,h*.38);x.fillStyle="rgba(255,255,255,.14)";x.fillRect(wx,h*.2,60,h*.09)}
+  [20,w-60].forEach(dx=>{x.fillStyle=lower;x.fillRect(dx,h*.12,36,h*.64);x.fillStyle="#0d1c2e";x.fillRect(dx+6,h*.2,24,h*.22)})})}
+const glowTex=tex(1024,128,(x,w,h)=>{for(let i=0;i<10;i++){x.fillStyle="#ffd98a";x.fillRect(80+i*86,h*.2,60,h*.38)}});
+function locoSide(base,stripe,lower){const t=tex(1024,215,(x,w,h)=>{const XX=m=>(m+20)/20*w,YY=y=>(1-y/4.2)*h;
+  x.fillStyle=base;x.fillRect(0,0,w,h);x.fillStyle=lower;x.fillRect(0,YY(1.7),w,YY(.9)-YY(1.7));x.fillStyle=stripe;x.fillRect(0,YY(2.05),w,h*.04);
+  x.fillStyle="#1a1a1a";for(let i=0;i<5;i++)x.fillRect(XX(-16+i*2.3),YY(3.7),XX(-14.5)-XX(-16),YY(2.4)-YY(3.7));
+  x.fillStyle="#0d1c2e";[[-3.6,-1.5],[-18.5,-16.4]].forEach(([a,b])=>x.fillRect(XX(a),YY(3.7),XX(b)-XX(a),YY(2.7)-YY(3.7)))});
+  t.repeat.set(1/20,1/4.2);t.offset.set(1,0);return t}
+function locoGeo(){const s=new THREE.Shape();s.moveTo(-20,.9);s.lineTo(-.3,.9);s.lineTo(0,1.5);s.lineTo(0,2.7);s.lineTo(-1.4,4.1);s.lineTo(-18.6,4.1);s.lineTo(-20,2.7);s.lineTo(-20,1.5);s.lineTo(-19.7,.9);
+  const g=new THREE.ExtrudeGeometry(s,{depth:3.1,bevelEnabled:false});g.translate(0,0,-1.55);return g}
+function bar(p1,p2,th,mat){const L=Math.hypot(p2[0]-p1[0],p2[1]-p1[1]);const b=new THREE.Mesh(new THREE.BoxGeometry(L,th,th),mat);
+  b.position.set((p1[0]+p2[0])/2,(p1[1]+p2[1])/2,0);b.rotation.z=Math.atan2(p2[1]-p1[1],p2[0]-p1[0]);return b}
+function mkTrain(tr,n,pal){
+  if(tr.g)scene.remove(tr.g);
+  const root=new THREE.Group(),det=new THREE.Group();det.position.y=.72;root.add(det);
+  // locomotive
+  const lg=locoGeo(),loco=new THREE.Mesh(lg,[M(0xffffff,{map:locoSide(pal.base,pal.stripe,pal.lower)}),M(new THREE.Color(pal.base))]);det.add(loco);
+  const ws=new THREE.Mesh(new THREE.BoxGeometry(.06,1.7,2.5),MB(0x0d1c2e));ws.position.set(-.65,3.43,0);ws.rotation.z=.785;det.add(ws);
+  const roofS=new THREE.Mesh(new THREE.BoxGeometry(16,.12,2.7),M(0x8a8f95));roofS.position.set(-10,4.15,0);det.add(roofS);
+  const hl=new THREE.Mesh(new THREE.SphereGeometry(.24,10,8),MB(0xffffff));hl.position.set(.04,2.3,0);det.add(hl);
+  const spot=new THREE.SpotLight(0xfff4d6,0,600,.22,.5,1.2);spot.position.set(.6,2.3,0);const tgt=new THREE.Object3D();tgt.position.set(120,1,0);det.add(spot,tgt);spot.target=tgt;
+  [-6,-14].forEach((px,i)=>{const pm=MB(0x222222),g=new THREE.Group();g.add(bar([px,4.15],[px+.8,4.95],.1,pm),bar([px+.8,4.95],[px,5.55],.1,pm));
+    const cs=new THREE.Mesh(new THREE.BoxGeometry(.25,.07,2.2),pm);cs.position.set(px,5.55,0);g.add(cs);const ins=new THREE.Mesh(new THREE.BoxGeometry(.5,.25,.5),M(0xbbbbbb));ins.position.set(px,4.25,0);g.add(ins);if(i)g.visible=false;det.add(g)});
+  // coaches
+  const side=coachSide(pal.base,pal.stripe,pal.lower),glow=new THREE.MeshBasicMaterial({map:glowTex,transparent:true,opacity:0,fog:true,depthWrite:false});
+  const sideM=M(0xffffff,{map:side}),endM=M(0x4a4d52),roofM=M(0x9aa0a6),underM=M(0x222426);
+  const bodyG=new THREE.BoxGeometry(23.5,2.9,3.25),roofG=new THREE.BoxGeometry(22.6,.2,2.6),underG=new THREE.BoxGeometry(21,.55,2.5),glowG=new THREE.PlaneGeometry(23.5,2.9);
+  const wheels=[],frames=[];
+  const addBogie=(cx,axles)=>{frames.push([cx,.72]);axles.forEach(a=>[-.84,.84].forEach(z=>wheels.push([cx+a,z])))};
+  addBogie(-4.6,[-1.9,0,1.9]);addBogie(-15.4,[-1.9,0,1.9]);
+  for(let i=0;i<n;i++){const cx=-20.5-i*24-11.75,g=new THREE.Group();g.position.x=cx;
+    g.add(new THREE.Mesh(bodyG,[endM,endM,roofM,underM,sideM,sideM]));g.children[0].position.y=2.55;
+    const rf=new THREE.Mesh(roofG,roofM);rf.position.y=4.1;g.add(rf);const uf=new THREE.Mesh(underG,underM);uf.position.y=.85;g.add(uf);
+    const gl=new THREE.Mesh(glowG,glow);gl.position.set(0,2.55,1.635);g.add(gl);const g2=gl.clone();g2.rotation.y=Math.PI;g2.position.z=-1.635;g.add(g2);
+    det.add(g);addBogie(cx-8.2,[-1.1,1.1]);addBogie(cx+8.2,[-1.1,1.1])}
+  const wg=new THREE.CylinderGeometry(.46,.46,.13,14);wg.rotateX(Math.PI/2);
+  const wI=new THREE.InstancedMesh(wg,M(0x23262a),wheels.length),m=new THREE.Matrix4();wheels.forEach((w,i)=>{m.setPosition(w[0],.46,w[1]);wI.setMatrixAt(i,m)});det.add(wI);
+  const fI=new THREE.InstancedMesh(new THREE.BoxGeometry(3.0,.3,2.2),M(0x1b1d20),frames.length);frames.forEach((f,i)=>{m.setPosition(f[0],.78,0);fI.setMatrixAt(i,m)});det.add(fI);
+  const tail=new THREE.Mesh(new THREE.SphereGeometry(.2,8,6),MB(0xff2a2a));tail.position.set(-20.5-n*24+.5,1.6,0);det.add(tail);
+  const mk=new THREE.Group(),mb=new THREE.Mesh(new THREE.BoxGeometry(1,1,1),MB(tr.color));mb.position.x=-.5;mk.add(mb);mk.userData.b=mb;
+  const lab=label(tr.title,"#"+tr.color.toString(16).padStart(6,"0"));
+  root.add(mk,lab);scene.add(root);
+  Object.assign(tr,{g:root,detail:det,marker:mk,lab,spot,glow,len:20.5+n*24});tr.z=0}
+
+// ---------- stations (built from the shared route, rebuilt whenever the train pair changes) ----------
+const boardTex=txt=>tex(512,80,(x,w,h)=>{x.fillStyle="#f2c230";x.fillRect(0,0,w,h);x.fillStyle="#222";x.fillRect(0,0,w,6);x.fillRect(0,h-6,w,6);x.font="700 42px system-ui";x.textAlign="center";x.textBaseline="middle";x.fillText(txt,w/2,h/2+2)});
+function mkBigStation(name,code){const g=new THREE.Group(),m=new THREE.Matrix4();
+  const plat=new THREE.Mesh(new THREE.BoxGeometry(420,1.0,7.5),M(0xb9b5ac));plat.position.set(0,.5,-5.75);g.add(plat);
+  const strip=new THREE.Mesh(new THREE.BoxGeometry(420,.03,.5),M(0xf2c230));strip.position.set(0,1.01,-2.3);g.add(strip);
+  const can=new THREE.Mesh(new THREE.BoxGeometry(240,.3,6),M(0x8a2f2a));can.position.set(0,5.4,-5.75);g.add(can);
+  const posts=new THREE.InstancedMesh(new THREE.BoxGeometry(.3,4.4,.3),M(0x555a60),13);for(let i=0;i<13;i++){m.setPosition(-120+i*20,3.2,-3.4);posts.setMatrixAt(i,m)}g.add(posts);
+  const lamps=new THREE.InstancedMesh(new THREE.BoxGeometry(.6,.2,.6),MB(0xfff2c0),20);for(let i=0;i<20;i++){m.setPosition(-190+i*20,5.2,-5.75);lamps.setMatrixAt(i,m)}g.add(lamps);
+  const bld=new THREE.Mesh(new THREE.BoxGeometry(50,9,14),M(0xe9dcc0));bld.position.set(0,4.5,-20);g.add(bld);
+  const roof=new THREE.Mesh(new THREE.BoxGeometry(52,1.2,16),M(0x9b4a32));roof.position.set(0,9.6,-20);g.add(roof);
+  const tm=boardTex(name.toUpperCase()+"  ("+code+")");
+  [-70,0,70].forEach(x=>{const b=new THREE.Mesh(new THREE.PlaneGeometry(12,1.9),MB(0xffffff,{map:tm}));b.position.set(x,4.2,-3.1);g.add(b)});
+  const bb=new THREE.Mesh(new THREE.PlaneGeometry(26,4),MB(0xffffff,{map:tm}));bb.position.set(0,7.5,-12.95);g.add(bb);return g}
+function mkMiniStation(name,code){const g=new THREE.Group(),tm=boardTex(name+"  ("+code+")");
+  const pl=new THREE.Mesh(new THREE.BoxGeometry(120,1,5),M(0xaaa69d));pl.position.set(0,.5,-4.3);g.add(pl);
+  const sh=new THREE.Mesh(new THREE.BoxGeometry(30,.25,4),M(0x7a3b35));sh.position.set(0,4.2,-4.3);g.add(sh);
+  const b=new THREE.Mesh(new THREE.PlaneGeometry(10,1.6),MB(0xffffff,{map:tm}));b.position.set(0,2.6,-2.0);g.add(b);return g}
+let STN=[],MINI=[],stSig="";
+function buildStations(){if(PAIR.sig===stSig)return;stSig=PAIR.sig;
+  [...STN,...MINI].forEach(s=>{scene.remove(s.g);if(s.lab)scene.remove(s.lab)});STN=[];MINI=[];
+  PAIR.stations.forEach(s=>{
+    if(s.big){const g=mkBigStation(s.name,s.code),lab=label(s.name.toUpperCase(),"#ffe08a");scene.add(g,lab);STN.push({...s,g,lab})}
+    else if(MINI.length<250){const g=mkMiniStation(s.name,s.code);scene.add(g);MINI.push({...s,g})}});
+  $("stsel").innerHTML='<option value="">Go to station…</option>'+STN.map(s=>`<option value="${s.code}">${s.name}</option>`).join("")}
+function where(c){const L=[...STN,...MINI];if(!L.length)return"";let best=L[0];for(const s of L)if(Math.abs(s.km-c)<Math.abs(best.km-c))best=s;
+  const dk=c-best.km;return Math.abs(dk)<1?`at ${best.name}`:`${Math.abs(dk).toFixed(0)} km ${dk<0?"before":"after"} ${best.name}`}
+
+// ---------- camera ----------
+let follow=null;
+function setCam(m){follow=null;
+  const pa=pos(T.a,t),pb=pos(T.b,t);
+  if(m=="over"){const span=Math.max(3000,PAIR.ok?(PAIR.hi-PAIR.lo)*1000:300000);O=X(PAIR.ok?(PAIR.lo+PAIR.hi)/2:(pa.c+pb.c)/2);cam.position.set(0,span*.46,span*.6);ctl.target.set(0,0,0)}
+  else if(m=="both"){follow="both";const gap=Math.abs(pa.c-pb.c)*1000;O=X((pa.c+pb.c)/2);cam.position.set(0,Math.max(60,gap*.7),Math.max(120,gap*1.3));ctl.target.set(0,0,0)}
+  else if(m.startsWith("st:")){const s=[...STN,...MINI].find(x=>x.code==m.slice(3));if(s){O=X(s.km);cam.position.set(-130,14,62);ctl.target.set(0,2,-3)}}
+  else{follow=m;O=X(pos(T[m],t).c);cam.position.set(16,6,18);ctl.target.set(-10,2.5,0)}}
+function resize(){const w=view.clientWidth,h=view.clientHeight;renderer.setSize(w,h);cam.aspect=w/h;cam.updateProjectionMatrix()}
+addEventListener("resize",resize);resize();
+
+// ---- zoom: exponential, toward the cursor; double-click focuses a train or re-centres the view ----
+const ray=new THREE.Raycaster(),gnd=new THREE.Plane(new THREE.Vector3(0,1,0),0);
+function ndc(e){const r=renderer.domElement.getBoundingClientRect();return new THREE.Vector2((e.clientX-r.left)/r.width*2-1,-((e.clientY-r.top)/r.height*2-1))}
+function groundPoint(e){ray.setFromCamera(ndc(e),cam);const P=new THREE.Vector3();return ray.ray.intersectPlane(gnd,P)?P:null}
+function zoomBy(k,P){P=P||ctl.target.clone();const c=cam.position.clone(),tg=ctl.target.clone();
+  const nc=P.clone().add(c.sub(P).multiplyScalar(k)),nt=P.clone().add(tg.sub(P).multiplyScalar(k));
+  const d=nc.distanceTo(nt);if(d<4&&k<1)return;if(d>900000&&k>1)return;
+  if(nc.y<1.5)nc.y=1.5;cam.position.copy(nc);ctl.target.copy(nt)}
+renderer.domElement.addEventListener("wheel",e=>{e.preventDefault();
+  const k=Math.exp(clamp(e.deltaY,-200,200)*.004);
+  let P=null;if(follow=="both"){follow=null}else if(!follow)P=groundPoint(e);zoomBy(k,P)},{passive:false});
+renderer.domElement.addEventListener("dblclick",e=>{ray.setFromCamera(ndc(e),cam);
+  for(const k of["a","b"]){const tr=T[k];if(tr.g&&ray.intersectObjects([tr.detail,tr.marker],true).length){setCam(k);return}}
+  const P=groundPoint(e);if(P){follow=null;const d=P.clone().sub(ctl.target);ctl.target.add(d);cam.position.add(d)}});
+function zoomBtn(k){if(follow=="both")follow=null;zoomBy(k)}
+
+// ---------- day / night ----------
+const C=a=>new THREE.Color(a);
+function envUpdate(dist){const hr=(((t%1440)+1440)%1440)/60;   // t counts from an IST-midnight epoch
+  const alt=Math.sin((hr-6)/12*Math.PI),day=clamp(alt*1.6+.2,0,1),night=1-day,sky=C(0x0b1326).lerp(C(0x8fb8e8),day);
+  scene.background=sky;scene.fog.color.copy(sky);scene.fog.near=dist*.8+600;scene.fog.far=dist*14+7000;
+  hemi.intensity=.38+.55*day;sun.intensity=.28+.65*day;sun.color.set(day>.3?0xffffff:0x8fa8ff);
+  gtex.offset.x=O/200;stars.material.opacity=clamp(night*1.2-.1,0,1);stars.position.copy(cam.position);
+  [T.a,T.b].forEach(tr=>{if(tr.glow){tr.glow.opacity=.12+.88*night;tr.spot.intensity=night>.05?3*night+.2:0}})}
+
+// ---------- UI ----------
+let t=nowMin(),playing=true,speed=1/60,last=performance.now();
+const tl=$("tl");
+const lateTxt=tr=>tr.delay>0?"+"+tr.delay+" min extra":tr.delay<0?Math.abs(tr.delay)+" min earlier":"";
+$("live").onclick=()=>{t=nowMin();speed=1/60;$("spd").value="0.016667";playing=true;$("play").textContent="Pause"};
+$("jump").onclick=()=>{if(!T.a.stops.length||!T.b.stops.length)return;const[t0,t1]=window_();const o=findOvertake(t0,t1,1);
+  if(o){t=o.t-15;return}
+  let best=1e9,bt=null;for(let x=t0;x<=t1;x++){const a=pos(T.a,x),b=pos(T.b,x);if(a.st=="notstarted"||b.st=="notstarted"||a.st=="done"||b.st=="done")continue;
+    if(PAIR.ok&&(!inCorr(a.c)||!inCorr(b.c)))continue;const d=Math.abs(a.c-b.c);if(d<best){best=d;bt=x}}
+  t=bt??nowMin()};
+$("play").onclick=()=>{playing=!playing;$("play").textContent=playing?"Pause":"Play"};
+$("spd").onchange=e=>speed=+e.target.value;
+tl.oninput=()=>{t=+tl.value};
+$("dl1").oninput=e=>{T.a.delay=+e.target.value||0;upd()};$("dl2").oninput=e=>{T.b.delay=+e.target.value||0;upd()};
+$("zin").onclick=()=>zoomBtn(.5);$("zout").onclick=()=>zoomBtn(2);
+document.querySelectorAll("[data-cam]").forEach(b=>b.onclick=()=>setCam(b.dataset.cam));
+$("stsel").onchange=e=>{if(e.target.value)setCam("st:"+e.target.value);e.target.value=""};
+
+function statusText(tr,p){const S=tr.stops;if(!S.length)return"";const nx=S[Math.min(p.i+1,S.length-1)],sh=tr.delay;
+  let s;if(p.st=="notstarted")s=`Not started — departs ${S[0].n} ${fmtT(S[0].dep+sh)}`;
+  else if(p.st=="done")s=`Journey complete at ${S[S.length-1].n}`;
+  else if(p.st=="halt")s=`Halted at <b>${S[p.i].n}</b> until ${fmtT(S[p.i].dep+sh)}`;
+  else{const pct=Math.min(100,p.v/(tr.vmax*60)*100);
+    s=`Running ${S[p.i].n} → <b>${nx.n}</b><br><span style="font-size:20px;font-weight:700">${p.v.toFixed(0)}</span> km/h <small>(cruise ${p.vpk.toFixed(0)}, top ${(tr.vmax*60).toFixed(0)})</small>
+    <div style="height:5px;background:#2c3846;border-radius:3px;margin:3px 0"><div style="height:5px;width:${pct}%;background:#${tr.color.toString(16).padStart(6,"0")};border-radius:3px"></div></div>ETA ${nx.n}: ${fmtT(nx.arr+sh)}`}
+  const lv=tr.live&&tr.live.cur;
+  return `<b>${tr.title}</b> ${lateTxt(tr)?`<span class="pill">${lateTxt(tr)}</span>`:""}<br>${s}<br><small>chainage ${p.c.toFixed(0)} km ${PAIR.ok?"("+where(p.c)+")":""}</small>`+
+    (lv?`<br><small style="color:var(--warn)">Last confirmed (NTES): ${lv.kind} ${tc(lv.name)} ${lv.time.slice(0,5)}${tr.live.updated?" · updated "+tr.live.updated.slice(-5):""}. Position after that is extrapolated.</small>`:"")}
+function upd(){
+  if(!T.a.stops.length||!T.b.stops.length)return;
+  // shared stops table
+  const cell=(tr,code)=>{const s=tr.stops.find(x=>x.c==code&&!x.pass);if(!s)return'<span style="color:var(--mut)">non-stop</span>';
+    const late=s.sa!=null?Math.round(s.arr-s.sa):null;return `${fmtT(s.arr+tr.delay)}–${fmtT(s.dep+tr.delay)}${s.proj?"*":""}${late!=null&&late>0?` <small style="color:var(--warn)">+${late}</small>`:""}`};
+  $("jt").innerHTML=STN.map(s=>`<tr><td>${s.name}</td><td>${cell(T.a,s.code)}</td><td>${cell(T.b,s.code)}</td></tr>`).join("");
+  $("jth").innerHTML=`<th>Station</th><th style="color:#${T.a.color.toString(16)}">${T.a.num}</th><th style="color:#${T.b.color.toString(16)}">${T.b.num}</th>`;
+  let h;
+  if(!PAIR.ok){h="These two trains share no stretch of route run in the same direction, so distance and overtaking can't be worked out."}
+  else{const[t0,t1]=window_(),o=findOvertake(t0,t1,1);
+    if(o){const P=T[o.passer],Q=T[o.passer=="a"?"b":"a"];h=`<b>Overtake:</b> ${P.title} passes ${Q.title} at <b>${fmt(o.t)}</b>, ${where(o.c)}.<br><small>${P.num} ${o.passer=="a"?(o.as=="run"?"running":"halted"):(o.bs=="run"?"running":"halted")}; ${Q.num} ${o.passer=="a"?(o.bs=="run"?"running":"halted on a loop line"):(o.as=="run"?"running":"halted on a loop line")}.</small>`}
+    else{const hn=minDelayHint();h=`<b>No overtake</b> on the shared route with these inputs.`+(hn?`<br>It would take ≈ <b>${hn.min} min</b> more delay on ${T[hn.lead].title} for the other train to pass it.`:"")}}
+  $("ov").innerHTML=h}
+
+// ---------- 3D objects follow the data ----------
+const PAL={a:{base:"#7b1e2b",stripe:"#e7c04a",lower:"#3a0f16"},b:{base:"#1d4f91",stripe:"#ffffff",lower:"#10294d"}};
+function applyLive(first){const A=NT.a,B=NT.b;
+  PAIR=makePair(A,B);PAIR.sig=PAIR.stations.map(s=>s.code).join(",");
+  const L={a:ntesBuild(A,k=>k),b:ntesBuild(B,PAIR.mapB)};
+  for(const k of["a","b"]){const tr=T[k],d=NT[k];tr.live=L[k];tr.stops=L[k].stops;tr.vmax=L[k].vmax;
+    tr.num=d.train;tr.name=d.name||"";tr.title=d.train+(d.name?" "+d.name:"");
+    const n=clamp(d.coaches.filter(c=>c!="ENG").length||20,6,26);
+    if(!tr.g||tr.n!==n||tr.builtTitle!==tr.title){tr.n=n;tr.builtTitle=tr.title;mkTrain(tr,n,PAL[k])}}
+  buildStations();_pc.clear();hintCache.sig="";
+  $("ttl").textContent=`${T.a.title} vs ${T.b.title}`;document.title=`${T.a.num} vs ${T.b.num} · live 3D`;
+  $("sub").textContent=PAIR.ok?`Shared route: ${PAIR.stations[0].name} → ${PAIR.stations[PAIR.stations.length-1].name} · ${PAIR.stations.length} stations, ${(PAIR.hi-PAIR.lo).toFixed(0)} km (the trains' routes agree only on this stretch)`:"No shared stations found";
+  $("lbA").innerHTML=`<b style="color:#${T.a.color.toString(16)}">${T.a.num}</b>`;$("lbB").innerHTML=`<b style="color:#${T.b.color.toString(16)}">${T.b.num}</b>`;
+  [$("fa"),$("fb")].forEach((b,i)=>b.textContent="Follow "+(i?T.b.num:T.a.num));$("hornA").textContent="Horn "+T.a.num;$("hornB").textContent="Horn "+T.b.num;
+  if(first)SND.honked={a:new Set(),b:new Set()};
+  const[t0,t1]=window_();tl.min=Math.floor(t0-60);tl.max=Math.ceil(t1+60);
+  upd();if(first){setCam("both");$("live").click()}}
+
+// ---------- live feed ----------
+const want={as:"",bs:""};
+function fillInst(sel,d){const cur=d.start;sel.innerHTML=d.instances.map(i=>`<option value="${i.start}"${i.start==cur?" selected":""}>${i.start.slice(0,6)} · ${i.text}</option>`).join("")}
+async function poll(){
+  if(location.protocol!="http:"&&location.protocol!="https:"){$("feed").innerHTML="Open this page through <code>python server.py</code> (http://localhost:8765/) — it needs the live NTES feed.";return}
+  const a=$("na").value.trim(),b=$("nb").value.trim();
+  if(!/^\d{5}$/.test(a)||!/^\d{5}$/.test(b)){$("feed").innerHTML="Enter two 5-digit train numbers and press <b>Load</b>.";return}
+  try{const r=await fetch(`/api/status?a=${a}&b=${b}`+(want.as?`&as=${want.as}`:"")+(want.bs?`&bs=${want.bs}`:""),{cache:"no-store"});const j=await r.json();
+    const lines=[];let ok=true;
+    for(const k of["a","b"]){const v=j[k];if(!v||v.error||!v.rows||!v.rows.length){ok=false;lines.push(`<b>${k=="a"?a:b}</b>: ${v&&v.error||"no data"}`);continue}
+      fillInst($(k=="a"?"ia":"ib"),v);
+      const col=k=="a"?"var(--a)":"var(--b)";
+      if(v.cur){const um=v.updated&&v.updated.match(/^(\d\d)-(\w{3})-\d{4} (\d\d:\d\d)$/),age=um?Math.max(0,Math.round(nowMin()-tmin(um[3]+" "+um[1]+"-"+um[2]))):NaN;
+        lines.push(`<b style="color:${col}">${v.train}</b> ${tc(v.name||"")}: ${v.cur.kind} <b>${tc(v.cur.name)}</b> at ${v.cur.time.slice(0,5)} <small>(NTES updated ${v.updated?v.updated.slice(-5):"?"}${isNaN(age)?"":", "+age+" min ago"})</small>`)}
+      else lines.push(`<b style="color:${col}">${v.train}</b> ${tc(v.name||"")}: <small>${v.instances.find(i=>i.start==v.start).text} — pick another run below</small>`)}
+    if(ok){const first=!NT||NT.a.train!=j.a.train||NT.b.train!=j.b.train||NT.a.start!=j.a.start||NT.b.start!=j.b.start;NT=j;applyLive(first)}
+    $("feed").innerHTML=lines.join("<br>")+`<br><small>Polled ${new Date().toLocaleTimeString("en-GB",{timeZone:"Asia/Kolkata"})} IST · every 60 s · source NTES, incl. non-stopping stations</small>`;
+    $("feed").style.borderColor=ok?"var(--ok)":"var(--warn)"}
+  catch(e){$("feed").innerHTML="Live feed unreachable: "+e;$("feed").style.borderColor="var(--warn)"}}
+function load(){want.as=want.bs="";NT=null;
+  try{localStorage.setItem("trains",JSON.stringify([$("na").value.trim(),$("nb").value.trim()]))}catch(e){}
+  history.replaceState(null,"",`?a=${$("na").value.trim()}&b=${$("nb").value.trim()}`);poll()}
+$("load").onclick=load;[$("na"),$("nb")].forEach(i=>i.addEventListener("keydown",e=>{if(e.key=="Enter")load()}));
+$("ia").onchange=e=>{want.as=e.target.value;if(!want.bs&&NT)want.bs=NT.b.start;NT=null;poll()};
+$("ib").onchange=e=>{want.bs=e.target.value;if(!want.as&&NT)want.as=NT.a.start;NT=null;poll()};
+setInterval(poll,60000);
+setInterval(()=>{if(NT)applyLive(false)},15000);   // re-anchor to the clock between NTES polls
+
+// ---------- frame loop ----------
+function frame(now){
+  const dt=(now-last)/1000;last=now;if(playing)t+=dt*speed;
+  tl.value=t;
+  {const dx=ctl.target.x;if(dx){O+=dx;cam.position.x-=dx;ctl.target.x=0}}   // floating origin
+  const dist=cam.position.distanceTo(ctl.target);cam.near=clamp(dist/400,.3,3000);cam.updateProjectionMatrix();
+  envUpdate(dist);
+  $("clock").textContent=fmt(t)+" IST"+(Math.abs(t-nowMin())<2?"  · LIVE":"");
+  const far=dist>20000;
+  trackG.visible=catG.visible=treeG.visible=!far;ground.visible=dist<150000;
+  trackG.position.x=Math.round(O/SP)*SP-O;catG.position.x=Math.round(O/MS)*MS-O;treeG.position.x=Math.round(O/TP)*TP-O;
+  const have=T.a.stops.length&&T.b.stops.length&&T.a.g&&T.b.g;
+  if(have){
+    const pa=pos(T.a,t),pb=pos(T.b,t);
+    $("st1").innerHTML=statusText(T.a,pa);$("st2").innerHTML=statusText(T.b,pb);
+    const lo=Math.min(T.a.stops[0].ch,T.b.stops[0].ch),hi=Math.max(T.a.stops[T.a.stops.length-1].ch,T.b.stops[T.b.stops.length-1].ch);
+    const rs=clamp(dist/2500,1,200);routeLine.visible=dist>4000;routeLine.scale.set(X(hi-lo),rs,rs);routeLine.position.set(X((lo+hi)/2)-O,.15*rs,0);
+    [...STN].forEach(st=>{const rx=X(st.km)-O;st.g.position.x=rx;st.g.visible=Math.abs(rx)<20000;
+      const d=Math.hypot(rx-cam.position.x,cam.position.y,cam.position.z),sc=clamp(d*.05,12,40000);
+      st.lab.position.set(rx,20+d*.03,-10);st.lab.scale.set(sc*4,sc*.75,1);st.lab.visible=d>200});
+    MINI.forEach(m=>{const rx=X(m.km)-O;m.g.position.x=rx;m.g.visible=Math.abs(rx)<5000});
+    [[T.a,pa,pb],[T.b,pb,pa]].forEach(([tr,p,o])=>{
+      tr.g.visible=true;
+      // a halted train steps onto the loop line when the other train is closing in behind it
+      const behind=o.c<p.c&&p.c-o.c<60&&o.st=="run";const want_=(p.st=="halt"&&behind)?4.6:0;
+      tr.z+=(want_-tr.z)*Math.min(1,dt*2);
+      tr.g.position.set(X(p.c)-O,0,tr.z);
+      const d=cam.position.distanceTo(tr.g.position);
+      tr.detail.visible=d<9000;
+      tr.marker.visible=d>2500;const H=d*.005,b=tr.marker.userData.b;b.scale.set(d*.02,H,H);b.position.set(-d*.01,H/2+.8,0);
+      const ls=clamp(d*.05,10,40000);tr.lab.position.set(-tr.len/2,8+d*.08,0);tr.lab.scale.set(ls*4,ls*.75,1);tr.lab.visible=d>40});
+    sndFrame(dt,{a:pa,b:pb});
+    if(follow){const fx=follow=="both"?(T.a.g.position.x+T.b.g.position.x)/2:T[follow].g.position.x-10;
+      const dl=new THREE.Vector3(fx,follow=="both"?0:2.5,follow=="both"?0:T[follow].z).sub(ctl.target);ctl.target.add(dl);cam.position.add(dl)}
+    const gk=pa.c-pb.c,ak=Math.abs(gk),lead=gk<0?T.b:T.a,rear=gk<0?T.a:T.b,bump=ak-lead.len/1000;
+    const fmtD=k=>k<2?`${(k*1000).toFixed(0)} m`:`${k.toFixed(1)} km`;
+    if(PAIR.ok){$("dist").style.display="";$("dist").innerHTML=`Distance between trains<br><b>${fmtD(ak)}</b><br><small>${rear.num} is behind ${lead.num}${bump>0?` · ${fmtD(bump)} clear of its tail`:" · overlapping at the same station"}</small>`;
+      $("gap").innerHTML=`Gap: <b>${fmtD(ak)}</b> — ${rear.num} is behind ${lead.num} &nbsp;<small>(${(ak/Math.max(1,(pa.v+pb.v)/2)*60).toFixed(0)} min at current speeds)</small>`}
+    else{$("dist").style.display="none";$("gap").innerHTML="No shared route — distance unavailable"}
+  }
+  ctl.update();renderer.render(scene,cam);requestAnimationFrame(frame)}
+
+// ---------- start ----------
+(function init(){
+  const q=new URLSearchParams(location.search);let a=q.get("a")||"",b=q.get("b")||"";
+  if(!a&&!b){try{const s=JSON.parse(localStorage.getItem("trains")||"[]");a=s[0]||"";b=s[1]||""}catch(e){}}
+  $("na").value=a;$("nb").value=b;
+  if(/^\d{5}$/.test(a)&&/^\d{5}$/.test(b))poll();else $("feed").innerHTML="Enter two 5-digit train numbers and press <b>Load</b>.";
+  requestAnimationFrame(frame)})();
+
+// ---------- sound (Web Audio, synthesised in the browser - no audio files) ----------
+// Per train: rail rumble, mid-frequency roar, traction-motor hum, wheel/joint clacks at a rate set by speed, brake squeal,
+// horn. Loudness, muffling, stereo pan and Doppler shift follow where the camera is relative to the train.
+const SND={ctx:null,on:false,vol:.8,tr:{},honked:{a:new Set(),b:new Set()}};
+function sndInit(){if(SND.ctx)return;const ctx=SND.ctx=new(window.AudioContext||window.webkitAudioContext)();
+  SND.master=ctx.createGain();SND.master.gain.value=SND.vol;
+  const comp=ctx.createDynamicsCompressor();SND.master.connect(comp);comp.connect(ctx.destination);
+  const buf=ctx.createBuffer(1,ctx.sampleRate*2,ctx.sampleRate),d=buf.getChannelData(0);for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;SND.noise=buf;
+  const noiseSrc=(type,f,q)=>{const s=ctx.createBufferSource();s.buffer=buf;s.loop=true;s.loopStart=Math.random();const fl=ctx.createBiquadFilter();fl.type=type;fl.frequency.value=f;fl.Q.value=q;const g=ctx.createGain();g.gain.value=0;s.connect(fl);fl.connect(g);s.start();return{s,fl,g}};
+  for(const k of["a","b"]){
+    const bus=ctx.createGain(),lp=ctx.createBiquadFilter(),pan=ctx.createStereoPanner();lp.type="lowpass";lp.frequency.value=8000;bus.connect(lp);lp.connect(pan);pan.connect(SND.master);
+    const rum=noiseSrc("lowpass",300,.7),roar=noiseSrc("bandpass",900,.5),sq=noiseSrc("bandpass",3200,9);[rum,roar,sq].forEach(n=>n.g.connect(bus));
+    const osc=ctx.createOscillator(),osc2=ctx.createOscillator(),mg=ctx.createGain(),mlp=ctx.createBiquadFilter();osc.type="sawtooth";osc2.type="square";mlp.type="lowpass";mlp.frequency.value=700;mg.gain.value=0;
+    osc.connect(mlp);osc2.connect(mlp);mlp.connect(mg);mg.connect(bus);osc.start();osc2.start();
+    SND.tr[k]={bus,lp,pan,rum,roar,sq,osc,osc2,mg,acc:0,pv:0,att:0,hornAtt:.5}}loadHorn();loadTrack()}
+function sndClick(v,att){const ctx=SND.ctx,s=ctx.createBufferSource();s.buffer=SND.noise;const f=ctx.createBiquadFilter(),g=ctx.createGain(),n=ctx.currentTime;
+  f.type="bandpass";f.frequency.value=500+Math.random()*1400;f.Q.value=1.5;
+  g.gain.setValueAtTime(0,n);g.gain.linearRampToValueAtTime(att*(.5+Math.random()*.4),n+.002);g.gain.exponentialRampToValueAtTime(.001,n+.05+Math.random()*.02);
+  s.connect(f);f.connect(g);g.connect(v.bus);s.start(n,Math.random()*1.5,.1)}
+// Track sound = assets/track.mp3, looped. Volume follows speed and camera distance; playback rate follows speed
+// (the recording is taken to be at about 80 km/h). The synthesised rumble/clacks below are only a fallback.
+let trackBuf=null;
+async function loadTrack(){try{const r=await fetch("assets/track.mp3");trackBuf=await SND.ctx.decodeAudioData(await r.arrayBuffer())}catch(e){trackBuf=null}}
+function trackLoop(v){const ctx=SND.ctx,s=ctx.createBufferSource(),g=ctx.createGain();s.buffer=trackBuf;s.loop=true;s.loopStart=.05;s.loopEnd=trackBuf.duration-.05;
+  g.gain.value=0;s.connect(g);g.connect(v.bus);s.start(0,Math.random()*trackBuf.duration);v.track={s,g}}
+// Horn = assets/horn.mp3 (your file). Hold the button / H key to sound it; auto-horns play the first ~2 s.
+let hornBuf=null;const hornPlaying={};
+let hornOff=0;
+async function loadHorn(){try{const r=await fetch("assets/horn.mp3");hornBuf=await SND.ctx.decodeAudioData(await r.arrayBuffer());
+  // skip any near-silent lead-in so the horn sounds the moment it is triggered
+  const d=hornBuf.getChannelData(0);let i=0;while(i<d.length&&Math.abs(d[i])<.06)i++;hornOff=Math.max(0,i/hornBuf.sampleRate-.05)}catch(e){hornBuf=null}}
+function hornStart(k,autoLen){if(!SND.on||!SND.ctx||hornPlaying[k])return;
+  if(!hornBuf){synthHorn(k,autoLen||1.2);return}
+  const ctx=SND.ctx,v=SND.tr[k],n=ctx.currentTime,s=ctx.createBufferSource(),g=ctx.createGain();
+  s.buffer=hornBuf;s.playbackRate.value=v.dop||1;g.gain.setValueAtTime(0,n);s.connect(g);g.connect(v.bus);s.start(n,hornOff);
+  const h=hornPlaying[k]={s,g,fading:false};s.onended=()=>{if(hornPlaying[k]===h)delete hornPlaying[k]};
+  if(autoLen)setTimeout(()=>hornStop(k),autoLen*1000)}
+function hornStop(k){const h=hornPlaying[k];if(!h||h.fading)return;h.fading=true;const n=SND.ctx.currentTime;
+  h.g.gain.cancelScheduledValues(n);h.g.gain.setValueAtTime(h.g.gain.value,n);h.g.gain.linearRampToValueAtTime(0,n+.3);try{h.s.stop(n+.35)}catch(e){}}
+function synthHorn(k,len){const ctx=SND.ctx,v=SND.tr[k],n=ctx.currentTime,g=ctx.createGain(),lp=ctx.createBiquadFilter();lp.type="lowpass";lp.frequency.value=2200;
+  g.gain.setValueAtTime(0,n);g.gain.linearRampToValueAtTime(.5*(v.hornAtt||.5),n+.06);g.gain.setValueAtTime(.5*(v.hornAtt||.5),n+len-.15);g.gain.linearRampToValueAtTime(0,n+len);
+  [415,523].forEach(f=>{const o=ctx.createOscillator();o.type="sawtooth";o.frequency.value=f;o.connect(lp);o.start(n);o.stop(n+len+.05)});lp.connect(g);g.connect(v.bus)}
+function sndFrame(dt,P){if(!SND.on||!SND.ctx)return;const ctx=SND.ctx,now=ctx.currentTime,m=cam.matrixWorld.elements,right=new THREE.Vector3(m[0],m[1],m[2]);
+  for(const k of["a","b"]){const tr=T[k],p=P[k],v=SND.tr[k];
+    const ms=(playing&&p.st=="run")?p.v/3.6:0,sf=clamp(ms/36,0,1);
+    const gx=tr.g.position.x,px=clamp(cam.position.x,gx-tr.len,gx),pt=new THREE.Vector3(px,1.5,tr.z);
+    const d=Math.max(5,cam.position.distanceTo(pt)),att=1/(1+Math.pow(d/80,1.3));v.att=att;
+    v.hornAtt=1/(1+Math.pow(d/350,1.3));const dir=pt.clone().sub(cam.position).divideScalar(d),toL=dir.clone().multiplyScalar(-1);
+    const vr=ms*toL.x,dop=clamp(343/(343-clamp(vr,-60,60)),.85,1.18);v.dop=dop;       // source speed toward the listener
+    v.pan.pan.setTargetAtTime(clamp(dir.dot(right),-1,1),now,.05);
+    v.lp.frequency.setTargetAtTime(500+19000*Math.pow(att,.7),now,.1);
+    const rec=!!trackBuf;if(rec&&!v.track)trackLoop(v);
+    if(rec){const run=clamp(ms/5,0,1);                         // fades in as the train gets moving
+      v.track.g.gain.setTargetAtTime(att*run*(.35+.65*sf)*1.6,now,.15);v.track.s.playbackRate.setTargetAtTime(clamp(ms/22,.35,1.7)*dop,now,.15);
+      v.rum.g.gain.setTargetAtTime(0,now,.1);v.roar.g.gain.setTargetAtTime(0,now,.1)}
+    else{v.rum.g.gain.setTargetAtTime(att*(.04+.55*sf),now,.1);v.rum.fl.frequency.setTargetAtTime((120+450*sf)*dop,now,.1);
+      v.roar.g.gain.setTargetAtTime(att*.45*Math.pow(sf,1.6),now,.1);v.roar.fl.frequency.setTargetAtTime((500+1000*sf)*dop,now,.1)}
+    const hz=(48+ms*2.6)*dop;v.osc.frequency.setTargetAtTime(hz,now,.1);v.osc2.frequency.setTargetAtTime(hz*.5,now,.1);
+    v.mg.gain.setTargetAtTime(att*((p.st=="run"||p.st=="halt")?(.05+.16*sf)*(rec?.45:1):0),now,.15);
+    // wheel/joint clacks: one every ~4.2 m of travel, grouped like a long train passing over rail joints
+    v.acc+=ms*dt;let c=0;const step=4.2;while(v.acc>=step&&c<4){if(att>.01&&!rec)sndClick(v,att);v.acc-=step;c++}if(v.acc>step*8)v.acc=0;
+    const hp=hornPlaying[k];if(hp&&!hp.fading){hp.g.gain.setTargetAtTime(.9*v.hornAtt,now,.05);hp.s.playbackRate.setTargetAtTime(dop,now,.05)}
+    // brake squeal while slowing for a stop
+    const decel=(v.pv-ms)/Math.max(dt,.001);v.pv=ms;
+    v.sq.g.gain.setTargetAtTime((p.st=="run"&&ms>1&&ms<12&&decel>.25)?att*.1:0,now,.12);
+    // short horn on approaching a station the train doesn't stop at
+    if($("ahorn").checked&&p.st=="run"&&ms>15){const s=[...STN,...MINI].find(x=>x.km>p.c&&x.km-p.c<.6&&!tr.stops.some(y=>y.c==x.code&&!y.pass));
+      if(s&&!SND.honked[k].has(s.code)){SND.honked[k].add(s.code);if(v.hornAtt>.02)hornStart(k,1.8)}}}}
+function sndToggle(){if(!SND.ctx)sndInit();SND.on=!SND.on;if(SND.ctx.state=="suspended")SND.ctx.resume();
+  SND.master.gain.setTargetAtTime(SND.on?SND.vol:0,SND.ctx.currentTime,.05);$("snd").textContent=SND.on?"🔊 Sound: on":"🔇 Sound: off"}
+$("snd").onclick=sndToggle;
+$("vol").oninput=e=>{SND.vol=+e.target.value;if(SND.ctx&&SND.on)SND.master.gain.setTargetAtTime(SND.vol,SND.ctx.currentTime,.05)};
+for(const [id,k] of [["hornA","a"],["hornB","b"]]){const el=$(id);
+  el.addEventListener("pointerdown",e=>{e.preventDefault();hornStart(k)});["pointerup","pointerleave","pointercancel"].forEach(ev=>el.addEventListener(ev,()=>hornStop(k)))}
+let hornKey=null;
+addEventListener("keydown",e=>{if(e.target.tagName=="INPUT"||e.target.tagName=="SELECT"||e.repeat||(e.key!="h"&&e.key!="H"))return;
+  if(!SND.tr.a||!SND.tr.b)return;hornKey=SND.tr.a.att>=SND.tr.b.att?"a":"b";hornStart(hornKey)});
+addEventListener("keyup",e=>{if((e.key=="h"||e.key=="H")&&hornKey){hornStop(hornKey);hornKey=null}});
+
+</script></body></html>
