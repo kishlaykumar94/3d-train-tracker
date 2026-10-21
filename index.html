@@ -400,7 +400,8 @@ async function poll(){
   const a=$("na").value.trim(),b=$("nb").value.trim();
   if(!/^\d{5}$/.test(a)||!/^\d{5}$/.test(b)){$("feed").innerHTML="Enter two 5-digit train numbers and press <b>Load</b>.";return}
   if(polling)return;polling=true;
-  try{const r=await fetch(`/api/status?a=${a}&b=${b}`+(want.as?`&as=${want.as}`:"")+(want.bs?`&bs=${want.bs}`:""),{cache:"no-store"});const j=await r.json();
+  try{const r=await fetch(`/api/status?a=${a}&b=${b}`+(want.as?`&as=${want.as}`:"")+(want.bs?`&bs=${want.bs}`:""),{cache:"no-store"});const txt=await r.text();let j;
+    try{j=JSON.parse(txt)}catch(e){throw new Error(`the server answered HTTP ${r.status} (${txt.slice(0,60).trim()}…) - its API function most likely timed out because NTES did not answer; run the app locally with start_server.bat`)}
     const lines=[];let ok=true;
     for(const k of["a","b"]){const v=j[k];if(!v||v.error||!v.rows||!v.rows.length){ok=false;lines.push(`<b>${k=="a"?a:b}</b>: ${v&&v.error||"no data"}`);continue}
       fillInst($(k=="a"?"ia":"ib"),v);

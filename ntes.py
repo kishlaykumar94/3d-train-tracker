@@ -10,6 +10,7 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Sa
 NTES = "https://enquiry.indianrail.gov.in/mntes"
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 TOK = re.compile(r"\d\d:\d\d \d\d-\w{3}\*?|--|-?\d+ Min|On Time|SRC|DSTN")
+TIMEOUT = 10          # seconds per NTES request; the whole fetch stays well inside a serverless time limit
 BACKGROUND = True      # local server refreshes stale pages in a thread; serverless must refresh inline
 LOCK = threading.Lock()
 HTML = {}              # train no -> (fetched_at, html)
@@ -26,7 +27,7 @@ def fetch_html(train):
         h = {"User-Agent": UA, "Accept-Encoding": "identity"}
         if ref:
             h["Referer"] = ref
-        return op.open(urllib.request.Request(url, data=data, headers=h), timeout=40).read().decode("utf-8", "ignore")
+        return op.open(urllib.request.Request(url, data=data, headers=h), timeout=TIMEOUT).read().decode("utf-8", "ignore")
 
     try:
         get(NTES + "/")
@@ -45,14 +46,14 @@ def fetch_html(train):
             ERR.pop(train, None)
         return page
     except Exception as e:
-        ERR[train] = f"could not reach NTES ({type(e).__name__}: {e})"
+        ERR[train] = f"could not reach NTES from this server within {TIMEOUT} s ({type(e).__name__}: {e}). NTES may be blocking this host - run the app locally instead"
         return ""
 
 
 def _refresh(train):
     html = fetch_html(train)
-    if "Start Date :" not in html:      # one retry: NTES occasionally answers a fresh session with an empty page
-        time.sleep(1)
+    if "Start Date :" not in html and "could not reach" not in ERR.get(train, ""):
+        time.sleep(1)                   # one retry: NTES occasionally answers a fresh session with an empty page
         html = fetch_html(train)
     if "Start Date :" in html:
         with LOCK:
