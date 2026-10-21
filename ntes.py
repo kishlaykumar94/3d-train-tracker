@@ -13,6 +13,7 @@ TOK = re.compile(r"\d\d:\d\d \d\d-\w{3}\*?|--|-?\d+ Min|On Time|SRC|DSTN")
 BACKGROUND = True      # local server refreshes stale pages in a thread; serverless must refresh inline
 LOCK = threading.Lock()
 HTML = {}              # train no -> (fetched_at, html)
+ERR = {}               # train no -> why the last fetch failed (shown to the user)
 INFLIGHT = set()
 
 
@@ -33,16 +34,26 @@ def fetch_html(train):
         n = re.search(r"name='([^']+)'", tok)
         v = re.search(r"value='([^']+)'", tok)
         if not (n and v):
+            ERR[train] = "NTES did not return a session token: " + re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", tok))[:160]
             return ""
         form = urllib.parse.urlencode({"lan": "en", "jDate": datetime.datetime.now(IST).strftime("%d-%b-%Y"),
                                        "trainNo": train, "appLang": "en", n.group(1): v.group(1)}).encode()
-        return re.sub(r"\s+", " ", get(f"{NTES}/tr?opt=TrainRunning&subOpt=FindRunningInstance", form, NTES + "/"))
-    except Exception:
+        page = re.sub(r"\s+", " ", get(f"{NTES}/tr?opt=TrainRunning&subOpt=FindRunningInstance", form, NTES + "/"))
+        if "Start Date :" not in page:
+            ERR[train] = "NTES answered but listed no runs (wrong train number?): " + re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", re.sub(r"<(style|script).*?</>", " ", page)))[:140].strip()
+        else:
+            ERR.pop(train, None)
+        return page
+    except Exception as e:
+        ERR[train] = f"could not reach NTES ({type(e).__name__}: {e})"
         return ""
 
 
 def _refresh(train):
     html = fetch_html(train)
+    if "Start Date :" not in html:      # one retry: NTES occasionally answers a fresh session with an empty page
+        time.sleep(1)
+        html = fetch_html(train)
     with LOCK:
         if "Start Date :" in html:
             HTML[train] = (time.time(), html)
@@ -160,7 +171,7 @@ def train_status(train, want):
     html = get_html(train)
     segs = split_instances(html)
     if not segs:
-        return {"train": train, "error": f"NTES returned no running instances for {train}"}
+        return {"train": train, "error": f"No data for {train}: " + ERR.get(train, "NTES returned no running instances")}
     inst = [summarize(s, g) for s, g in segs]
     start = want if want in [i["start"] for i in inst] else pick_default(inst)
     seg = dict(segs)[start]
