@@ -394,10 +394,12 @@ function applyLive(first){const A=NT.a,B=NT.b;
 // ---------- live feed ----------
 const want={as:"",bs:""};
 function fillInst(sel,d){const cur=d.start;sel.innerHTML=d.instances.map(i=>`<option value="${i.start}"${i.start==cur?" selected":""}>${i.start.slice(0,6)} · ${i.text}</option>`).join("")}
+let polling=false;
 async function poll(){
   if(location.protocol!="http:"&&location.protocol!="https:"){$("feed").innerHTML="Open this page through <code>python server.py</code> (http://localhost:8765/) — it needs the live NTES feed.";return}
   const a=$("na").value.trim(),b=$("nb").value.trim();
   if(!/^\d{5}$/.test(a)||!/^\d{5}$/.test(b)){$("feed").innerHTML="Enter two 5-digit train numbers and press <b>Load</b>.";return}
+  if(polling)return;polling=true;
   try{const r=await fetch(`/api/status?a=${a}&b=${b}`+(want.as?`&as=${want.as}`:"")+(want.bs?`&bs=${want.bs}`:""),{cache:"no-store"});const j=await r.json();
     const lines=[];let ok=true;
     for(const k of["a","b"]){const v=j[k];if(!v||v.error||!v.rows||!v.rows.length){ok=false;lines.push(`<b>${k=="a"?a:b}</b>: ${v&&v.error||"no data"}`);continue}
@@ -409,7 +411,8 @@ async function poll(){
     if(ok){const first=!NT||NT.a.train!=j.a.train||NT.b.train!=j.b.train||NT.a.start!=j.a.start||NT.b.start!=j.b.start;NT=j;applyLive(first)}
     $("feed").innerHTML=lines.join("<br>")+`<br><small>Polled ${new Date().toLocaleTimeString("en-GB",{timeZone:"Asia/Kolkata"})} IST · every 60 s · source NTES, incl. non-stopping stations</small>`;
     $("feed").style.borderColor=ok?"var(--ok)":"var(--warn)"}
-  catch(e){$("feed").innerHTML="Live feed unreachable: "+e;$("feed").style.borderColor="var(--warn)"}}
+  catch(e){$("feed").innerHTML="Live feed unreachable: "+e;$("feed").style.borderColor="var(--warn)"}
+  finally{polling=false}}
 function load(){want.as=want.bs="";NT=null;
   try{localStorage.setItem("trains",JSON.stringify([$("na").value.trim(),$("nb").value.trim()]))}catch(e){}
   history.replaceState(null,"",`?a=${$("na").value.trim()}&b=${$("nb").value.trim()}`);poll()}

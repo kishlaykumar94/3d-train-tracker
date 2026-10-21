@@ -14,7 +14,7 @@ BACKGROUND = True      # local server refreshes stale pages in a thread; serverl
 LOCK = threading.Lock()
 HTML = {}              # train no -> (fetched_at, html)
 ERR = {}               # train no -> why the last fetch failed (shown to the user)
-INFLIGHT = set()
+TL = {}                # train no -> lock held while that train is being fetched
 
 
 # ---------------- fetching ----------------
@@ -54,26 +54,37 @@ def _refresh(train):
     if "Start Date :" not in html:      # one retry: NTES occasionally answers a fresh session with an empty page
         time.sleep(1)
         html = fetch_html(train)
-    with LOCK:
-        if "Start Date :" in html:
+    if "Start Date :" in html:
+        with LOCK:
             HTML[train] = (time.time(), html)
-        INFLIGHT.discard(train)
     return html
 
 
+def _bg(train, lk):
+    try:
+        _refresh(train)
+    finally:
+        lk.release()
+
+
 def get_html(train):
-    """Cached NTES page for a train; refreshed when older than 40 s (in the background when running locally)."""
+    """NTES page for a train, at most 40 s old. A request that arrives while another is already fetching the same
+    train waits for it and reuses the result (it used to get an empty page, which showed as "no running instances")."""
     with LOCK:
+        lk = TL.setdefault(train, threading.Lock())
         c = HTML.get(train)
-        go = ((not c) or time.time() - c[0] > 40) and train not in INFLIGHT
-        if go:
-            INFLIGHT.add(train)
-    if go:
-        if c and BACKGROUND:
-            threading.Thread(target=_refresh, args=(train,), daemon=True).start()
-        else:
-            return _refresh(train) or (c[1] if c else "")
-    return c[1] if c else ""
+    if c and time.time() - c[0] <= 40:
+        return c[1]
+    if c and BACKGROUND:                # local server: answer now from the cache, refresh behind the scenes
+        if lk.acquire(blocking=False):
+            threading.Thread(target=_bg, args=(train, lk), daemon=True).start()
+        return c[1]
+    with lk:
+        with LOCK:
+            c2 = HTML.get(train)
+        if c2 and time.time() - c2[0] <= 40:
+            return c2[1]
+        return _refresh(train) or (c[1] if c else "")
 
 
 # ---------------- parsing ----------------
