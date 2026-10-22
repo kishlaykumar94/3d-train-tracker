@@ -2,7 +2,7 @@
 import json, os
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
-import ntes
+import ntes, geo
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -13,6 +13,22 @@ class H(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
+        if u.path == "/api/route":
+            raw = (parse_qs(u.query).get("s") or [""])[0]
+            sts = [{"code": c, "km": float(k)} for c, k in (x.split(":") for x in raw.split(",") if ":" in x)]
+            if len(sts) < 2:
+                out = {"state": "error", "msg": "need at least two stations"}
+            else:
+                key, j = geo.start_job(sts)
+                out = {"state": j["state"], "msg": j["msg"], "result": j["result"] if j["state"] == "done" else None}
+            b = json.dumps(out).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+            return
         if u.path == "/api/status":
             b = json.dumps(ntes.api_status(parse_qs(u.query))).encode()
             self.send_response(200)

@@ -24,7 +24,7 @@ small{color:var(--mut)}
 #clock{position:absolute;left:10px;top:8px;font-size:15px;font-weight:600;text-shadow:0 1px 3px #000}
 table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:2px 4px;text-align:left;border-bottom:1px solid #26303b}
 </style></head><body>
-<div id="view"><div id="clock"></div><div id="dist"></div></div>
+<div id="view"><div id="clock"></div><div id="dist"></div><div id="attr" style="position:absolute;right:6px;bottom:4px;font-size:10px;color:#fff;text-shadow:0 1px 2px #000;max-width:60%;text-align:right;pointer-events:none"></div></div>
 <div id="side">
 <h1 id="ttl">Live train 3D</h1>
 <small id="sub">Enter two train numbers to track them live from NTES.</small>
@@ -45,6 +45,12 @@ table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:2px 4px;t
 <div class="row"><button id="zin" title="Zoom in">＋</button><button id="zout" title="Zoom out">－</button><button data-cam="both">Frame both</button><button data-cam="over">Overview</button><select id="stsel"><option value="">Go to station…</option></select></div>
 <div class="row"><button id="fa" data-cam="a">Follow A</button><button id="fb" data-cam="b">Follow B</button></div>
 
+<h2>Real landscape</h2>
+<label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="real"> Real Google Earth landscape under the trains</label>
+<div class="row"><input id="ion" type="password" placeholder="Cesium ion access token" style="flex:1;min-width:0" autocomplete="off"><button id="ionsave">Save</button></div>
+<div id="realst" class="card" style="border-color:#555;font-size:12px">Off. Load two trains, paste your free Cesium ion token (kept only in this browser), tick the box.</div>
+<small>Real track and station positions come from OpenStreetMap (traced on the server and cached; a new stretch can take a few minutes the first time). Landscape: Google Photorealistic 3D Tiles through your Cesium ion account.</small>
+
 <h2>Sound</h2>
 <div class="row"><button id="snd">🔇 Sound: off</button><input type="range" id="vol" min="0" max="1.5" step="0.05" value="0.8" style="width:110px" title="Volume"></div>
 <div class="row"><button id="hornA">Horn A</button><button id="hornB">Horn B</button><label><input type="checkbox" id="ahorn" checked> auto-horn at non-stop stations</label></div>
@@ -59,9 +65,20 @@ table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:2px 4px;t
 
 <p><small><b>Data notes.</b> Live data comes from NTES (enquiry.indianrail.gov.in) through <code>server.py</code>: actual/projected times per stop (* = projection), every non-stopping station, the last confirmed location and the coach list. Between NTES updates a train's position is extrapolated at ~85 km/h to its next stop, so it is an estimate, not GPS. Top speed per train is derived from its own timetable. Both trains are assumed to run the same direction along their shared route.</small></p>
 </div>
-<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
-<script>
+<script type="importmap">
+{"imports":{
+ "three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+ "three/examples/jsm/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+ "3d-tiles-renderer":"https://cdn.jsdelivr.net/npm/3d-tiles-renderer@0.4.14/src/index.js",
+ "3d-tiles-renderer/plugins":"https://cdn.jsdelivr.net/npm/3d-tiles-renderer@0.4.14/src/three/plugins/index.js",
+ "3d-tiles-renderer/core/plugins":"https://cdn.jsdelivr.net/npm/3d-tiles-renderer@0.4.14/src/core/plugins/index.js"
+}}
+</script>
+<script type="module">
+import * as THREE from "three";
+import {OrbitControls} from "three/examples/jsm/controls/OrbitControls.js";
+// keep the look the scene was tuned with on three r128: linear colour, legacy-style light units
+THREE.ColorManagement.enabled=false;
 // ---------- state ----------
 const $=id=>document.getElementById(id);
 const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
@@ -170,10 +187,10 @@ function minDelayHint(){const sig=T.a.stops.length+"|"+T.b.stops.length+"|"+(T.a
 
 // ---------- 3D (real scale, metres, floating origin) ----------
 const view=document.getElementById("view");
-const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));view.appendChild(renderer.domElement);
-const scene=new THREE.Scene();scene.fog=new THREE.Fog(0x8fb8e8,2000,9000);
+const renderer=new THREE.WebGLRenderer({antialias:true});renderer.outputColorSpace=THREE.LinearSRGBColorSpace;renderer.setPixelRatio(Math.min(devicePixelRatio,2));view.appendChild(renderer.domElement);
+const scene=new THREE.Scene();const FOG=new THREE.Fog(0x8fb8e8,2000,9000);scene.fog=FOG;
 const cam=new THREE.PerspectiveCamera(50,1,.5,4e6);
-const ctl=new THREE.OrbitControls(cam,renderer.domElement);ctl.enableDamping=true;ctl.enableZoom=false;ctl.maxPolarAngle=Math.PI*.495;ctl.minDistance=6;ctl.maxDistance=900000;
+const ctl=new OrbitControls(cam,renderer.domElement);ctl.enableDamping=true;ctl.enableZoom=false;ctl.maxPolarAngle=Math.PI*.495;ctl.minDistance=6;ctl.maxDistance=900000;
 const hemi=new THREE.HemisphereLight(0xcfe3ff,0x334433,.8);scene.add(hemi);
 const sun=new THREE.DirectionalLight(0xffffff,.8);sun.position.set(300,500,200);scene.add(sun);
 const X=c=>c*1000;let O=0;                       // world metres; O = floating origin
@@ -296,20 +313,109 @@ function where(c){const L=[...STN,...MINI];if(!L.length)return"";let best=L[0];f
   const dk=c-best.km;return Math.abs(dk)<1?`at ${best.name}`:`${Math.abs(dk).toFixed(0)} km ${dk<0?"before":"after"} ${best.name}`}
 
 // ---------- camera ----------
+// ---------- real landscape: Google Photorealistic 3D Tiles (via Cesium ion) + the real track from OpenStreetMap ----------
+// The page normally works in a straight local frame (x along the track, y up, z across). In real-landscape mode the same
+// frame is kept, but re-anchored to the real route: the frame sits at one point of the route with x = track direction,
+// y = local up, z = right, and the tiles (which are in Earth-centred coordinates) are transformed into it. Trains are placed
+// by following the traced route, so they curve with the real line and ride on the real ground (found by ray-casting the tiles).
+const GEO={on:false,route:null,win:null,tiles:null,tilesOK:false,busy:false,c0:0,s0:0,
+  P0:new THREE.Vector3(),T:new THREE.Vector3(1,0,0),U:new THREE.Vector3(0,1,0),R:new THREE.Vector3(0,0,1),M:new THREE.Matrix4(),hc:{},hcT:0,rr:0};
+const WA=6378137,WB=6356752.314245,E2=1-(WB*WB)/(WA*WA);
+function llh(lat,lon,h=0){const a=lat*Math.PI/180,o=lon*Math.PI/180,sa=Math.sin(a),ca=Math.cos(a),N=WA/Math.sqrt(1-E2*sa*sa);
+  return new THREE.Vector3((N+h)*ca*Math.cos(o),(N+h)*ca*Math.sin(o),(N*(1-E2)+h)*sa)}
+const upAt=p=>new THREE.Vector3(p.x/(WA*WA),p.y/(WA*WA),p.z/(WB*WB)).normalize();
+
+function geoBuild(d){const P=d.poly.map(q=>llh(q[0],q[1])),S=d.poly.map(q=>q[2]),n=P.length;
+  const seg=[];for(let i=0;i<n-1;i++)seg.push(P[i+1].clone().sub(P[i]).normalize());
+  const D=P.map((_,i)=>i==0?seg[0].clone():i==n-1?seg[n-2].clone():seg[i-1].clone().add(seg[i]).normalize());   // direction at each vertex
+  const an=d.stations.map(s=>({km:s.km,s:s.s})).sort((a,b)=>a.km-b.km);
+  return{P,S,D,an,lo:an[0].km,hi:an[an.length-1].km}}
+function sOf(r,c){const a=r.an,n=a.length;if(c<=a[0].km)return a[0].s+(c-a[0].km)*1000;if(c>=a[n-1].km)return a[n-1].s+(c-a[n-1].km)*1000;
+  let lo=0,hi=n-1;while(hi-lo>1){const m=(lo+hi)>>1;if(a[m].km<=c)lo=m;else hi=m}return a[lo].s+(c-a[lo].km)*(a[hi].s-a[lo].s)/((a[hi].km-a[lo].km)||1)}
+function cOf(r,s){const a=r.an,n=a.length;if(s<=a[0].s)return a[0].km+(s-a[0].s)/1000;if(s>=a[n-1].s)return a[n-1].km+(s-a[n-1].s)/1000;
+  let lo=0,hi=n-1;while(hi-lo>1){const m=(lo+hi)>>1;if(a[m].s<=s)lo=m;else hi=m}return a[lo].km+(s-a[lo].s)*(a[hi].km-a[lo].km)/((a[hi].s-a[lo].s)||1)}
+function routePt(r,s){const P=r.P,S=r.S,n=P.length;                       // ECEF point + unit tangent at route distance s (straight beyond the ends)
+  if(s<=S[0])return{p:P[0].clone().addScaledVector(r.D[0],s-S[0]),t:r.D[0]};
+  if(s>=S[n-1])return{p:P[n-1].clone().addScaledVector(r.D[n-1],s-S[n-1]),t:r.D[n-1]};
+  let lo=0,hi=n-1;while(hi-lo>1){const m=(lo+hi)>>1;if(S[m]<=s)lo=m;else hi=m}
+  const k=(s-S[lo])/((S[hi]-S[lo])||1);return{p:P[lo].clone().lerp(P[hi],k),t:r.D[lo].clone().lerp(r.D[hi],k).normalize()}}
+function geoFrame(c0){const r=GEO.route,s0=sOf(r,c0),q=routePt(r,s0);GEO.c0=c0;GEO.s0=s0;GEO.P0.copy(q.p);
+  const U=upAt(q.p),T=q.t.clone().addScaledVector(U,-q.t.dot(U)).normalize(),R=new THREE.Vector3().crossVectors(T,U);
+  GEO.T.copy(T);GEO.U.copy(U);GEO.R.copy(R);
+  const Mr=new THREE.Matrix4().set(T.x,T.y,T.z,0,U.x,U.y,U.z,0,R.x,R.y,R.z,0,0,0,0,1);
+  GEO.M.multiplyMatrices(Mr,new THREE.Matrix4().makeTranslation(-q.p.x,-q.p.y,-q.p.z));
+  if(GEO.tiles){const g=GEO.tiles.group;g.matrixAutoUpdate=false;g.matrix.copy(GEO.M);g.updateMatrixWorld(true)}}
+const geoRot=v=>new THREE.Vector3(GEO.T.dot(v),GEO.U.dot(v),GEO.R.dot(v));
+const geoWorld=e=>geoRot(e.clone().sub(GEO.P0));
+function geoAt(c){const q=routePt(GEO.route,sOf(GEO.route,c));return{pos:geoWorld(q.p),fwd:geoRot(q.t),up:geoRot(upAt(q.p))}}
+function geoReanchor(c0){const Mo=GEO.M.clone();geoFrame(c0);const dl=GEO.M.clone().multiply(Mo.invert());cam.position.applyMatrix4(dl);ctl.target.applyMatrix4(dl)}
+function geoNearestC(w){const r=GEO.route,e=GEO.P0.clone().addScaledVector(GEO.T,w.x).addScaledVector(GEO.U,w.y).addScaledVector(GEO.R,w.z);
+  let best=0,bd=1e30;for(let i=0;i<r.P.length;i++){if(Math.abs(r.S[i]-GEO.s0)>40000)continue;const d=r.P[i].distanceToSquared(e);if(d<bd){bd=d;best=i}}
+  return cOf(r,r.S[best])}
+// ground height under a world position (metres above the local ellipsoid plane), found by ray-casting the loaded tiles
+const gRay=new THREE.Raycaster();gRay.firstHitOnly=true;
+function geoGround(pos,up){if(!GEO.tiles||!GEO.tilesOK)return null;gRay.set(pos.clone().addScaledVector(up,3000),up.clone().negate());gRay.far=6000;
+  const h=gRay.intersectObject(GEO.tiles.group,true);return h.length?3000-h[0].distance:null}
+function geoHeight(key,pos,up,every){const c=GEO.hc[key]||(GEO.hc[key]={h:0,t:-1e9,ok:false}),n=performance.now();
+  if(n-c.t>every){c.t=n;const h=geoGround(pos,up);if(h!=null){c.h+=(h-c.h)*(c.ok?.5:1);c.ok=true}}return c.h}
+
+// tiles
+async function geoInitTiles(token){
+  if(GEO.tiles||!token)return;
+  try{const {TilesRenderer}=await import("3d-tiles-renderer"),{CesiumIonAuthPlugin,GLTFExtensionsPlugin}=await import("3d-tiles-renderer/plugins"),
+      {DRACOLoader}=await import("three/examples/jsm/loaders/DRACOLoader.js");
+    const tiles=new TilesRenderer();
+    tiles.registerPlugin(new CesiumIonAuthPlugin({apiToken:token,assetId:"2275207",autoRefreshToken:true}));
+    tiles.registerPlugin(new GLTFExtensionsPlugin({dracoLoader:new DRACOLoader().setDecoderPath("https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/")}));
+    tiles.setCamera(cam);tiles.setResolutionFromRenderer(cam,renderer);tiles.errorTarget=8;tiles.group.matrixAutoUpdate=false;
+    tiles.addEventListener("load-error",e=>{geoStatus("Tiles: error loading ("+(e.error&&e.error.message||"check that the Cesium ion token is correct and allows asset 2275207")+")","tiles")});
+    tiles.addEventListener("load-tile-set",()=>{GEO.tilesOK=true;geoStatus("Tiles: Google 3D tiles loading ✓","tiles")});
+    scene.add(tiles.group);GEO.tiles=tiles;if(GEO.route)geoFrame(GEO.c0)
+  }catch(e){geoStatus("Tiles: could not start the renderer: "+e.message,"tiles")}}
+function geoStatus(m,k="route"){GEO["m_"+k]=m;$("realst").innerHTML=[GEO.m_route,GEO.m_tiles].filter(Boolean).join("<br>")}
+function geoAttrib(){if(!GEO.tiles)return;const a=[];try{GEO.tiles.getAttributions(a)}catch(e){}
+  $("attr").innerHTML=a.map(x=>x.type=="string"?x.value:x.value).join(" · ")}
+
+// route from the server (OpenStreetMap lookups run there and are cached; first use of a stretch can take minutes)
+async function geoRequest(cCenter){
+  if(GEO.busy||!PAIR.ok)return;GEO.busy=true;
+  const lo=Math.max(PAIR.lo,cCenter-80),hi=Math.min(PAIR.hi,cCenter+80),sts=PAIR.stations.filter(s=>s.km>=lo&&s.km<=hi);
+  if(sts.length<2){GEO.busy=false;geoStatus("No shared stations around the camera to trace a route from.");return}
+  const q="/api/route?s="+sts.map(s=>s.code+":"+s.km).join(","),t0=Date.now();
+  try{for(;;){const r=await fetch(q,{cache:"no-store"}),j=await r.json();
+      if(j.state=="done"){GEO.route=geoBuild(j.result);GEO.win=[lo,hi];geoFrame(clamp(cCenter,GEO.route.lo,GEO.route.hi));GEO.on=true;applyRealMode();
+        geoStatus("Route: real track traced ("+(GEO.route.P.length)+" points, "+Math.round(GEO.route.S[GEO.route.S.length-1]/1000)+" km)");if(!GEO.tiles)geoStatus("Tiles: no Cesium token — plain ground","tiles");break}
+      if(j.state=="error"){geoStatus("Could not trace the route: "+j.msg);break}
+      geoStatus(`${j.msg||"working…"} (${Math.round((Date.now()-t0)/1000)} s — the first time for a stretch can take a few minutes)`);
+      await new Promise(r=>setTimeout(r,4000));if(!$("real").checked)break}}
+  catch(e){geoStatus("Route request failed: "+e.message)}
+  GEO.busy=false}
+function applyRealMode(){const real=GEO.on&&GEO.route;scene.fog=real?null:FOG;if(!real){$("attr").innerHTML=""}}
+function setO(c){if(GEO.on&&GEO.route)geoFrame(clamp(c,GEO.route.lo-20,GEO.route.hi+20));else O=X(c)}
+// per-frame: keep the frame near what the camera is looking at, and fetch more route when it moves outside the traced window
+function geoKeepFrame(){
+  const c=geoNearestC(ctl.target),s=sOf(GEO.route,c);if(Math.abs(s-GEO.s0)>2500)geoReanchor(c);
+  if(GEO.win&&(c<GEO.win[0]+10&&GEO.win[0]>PAIR.lo+1||c>GEO.win[1]-10&&GEO.win[1]<PAIR.hi-1))geoRequest(c)}
+function geoPlace(tr,p){const w=geoAt(p.c),h=geoHeight(tr.key,w.pos,w.up,250);
+  const right=new THREE.Vector3().crossVectors(w.fwd,w.up).normalize(),up=new THREE.Vector3().crossVectors(right,w.fwd).normalize();
+  tr.g.position.copy(w.pos).addScaledVector(up,h).addScaledVector(right,tr.z);
+  tr.g.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(w.fwd,up,right));tr.fwd=w.fwd}
+
 let follow=null;
 function setCam(m){follow=null;
   const pa=pos(T.a,t),pb=pos(T.b,t);
-  if(m=="over"){const span=Math.max(3000,PAIR.ok?(PAIR.hi-PAIR.lo)*1000:300000);O=X(PAIR.ok?(PAIR.lo+PAIR.hi)/2:(pa.c+pb.c)/2);cam.position.set(0,span*.46,span*.6);ctl.target.set(0,0,0)}
-  else if(m=="both"){follow="both";const gap=Math.abs(pa.c-pb.c)*1000;O=X((pa.c+pb.c)/2);cam.position.set(0,Math.max(60,gap*.7),Math.max(120,gap*1.3));ctl.target.set(0,0,0)}
-  else if(m.startsWith("st:")){const s=[...STN,...MINI].find(x=>x.code==m.slice(3));if(s){O=X(s.km);cam.position.set(-130,14,62);ctl.target.set(0,2,-3)}}
-  else{follow=m;O=X(pos(T[m],t).c);cam.position.set(16,6,18);ctl.target.set(-10,2.5,0)}}
-function resize(){const w=view.clientWidth,h=view.clientHeight;renderer.setSize(w,h);cam.aspect=w/h;cam.updateProjectionMatrix()}
+  if(m=="over"){const span=Math.max(3000,PAIR.ok?(PAIR.hi-PAIR.lo)*1000:300000);setO(PAIR.ok?(PAIR.lo+PAIR.hi)/2:(pa.c+pb.c)/2);cam.position.set(0,span*.46,span*.6);ctl.target.set(0,0,0)}
+  else if(m=="both"){follow="both";const gap=Math.abs(pa.c-pb.c)*1000;setO((pa.c+pb.c)/2);cam.position.set(0,Math.max(60,gap*.7),Math.max(120,gap*1.3));ctl.target.set(0,0,0)}
+  else if(m.startsWith("st:")){const s=[...STN,...MINI].find(x=>x.code==m.slice(3));if(s){setO(s.km);cam.position.set(-130,14,62);ctl.target.set(0,2,-3)}}
+  else{follow=m;setO(pos(T[m],t).c);cam.position.set(16,6,18);ctl.target.set(-10,2.5,0)}}
+function resize(){const w=view.clientWidth,h=view.clientHeight;renderer.setSize(w,h);cam.aspect=w/h;cam.updateProjectionMatrix();if(GEO.tiles)GEO.tiles.setResolutionFromRenderer(cam,renderer)}
 addEventListener("resize",resize);resize();
 
 // ---- zoom: exponential, toward the cursor; double-click focuses a train or re-centres the view ----
 const ray=new THREE.Raycaster(),gnd=new THREE.Plane(new THREE.Vector3(0,1,0),0);
 function ndc(e){const r=renderer.domElement.getBoundingClientRect();return new THREE.Vector2((e.clientX-r.left)/r.width*2-1,-((e.clientY-r.top)/r.height*2-1))}
-function groundPoint(e){ray.setFromCamera(ndc(e),cam);const P=new THREE.Vector3();return ray.ray.intersectPlane(gnd,P)?P:null}
+function groundPoint(e){ray.setFromCamera(ndc(e),cam);if(GEO.on&&GEO.tilesOK){ray.firstHitOnly=true;const h=ray.intersectObject(GEO.tiles.group,true);if(h.length)return h[0].point.clone()}
+  const P=new THREE.Vector3();return ray.ray.intersectPlane(gnd,P)?P:null}
 function zoomBy(k,P){P=P||ctl.target.clone();const c=cam.position.clone(),tg=ctl.target.clone();
   const nc=P.clone().add(c.sub(P).multiplyScalar(k)),nt=P.clone().add(tg.sub(P).multiplyScalar(k));
   const d=nc.distanceTo(nt);if(d<4&&k<1)return;if(d>900000&&k>1)return;
@@ -326,10 +432,10 @@ function zoomBtn(k){if(follow=="both")follow=null;zoomBy(k)}
 const C=a=>new THREE.Color(a);
 function envUpdate(dist){const hr=(((t%1440)+1440)%1440)/60;   // t counts from an IST-midnight epoch
   const alt=Math.sin((hr-6)/12*Math.PI),day=clamp(alt*1.6+.2,0,1),night=1-day,sky=C(0x0b1326).lerp(C(0x8fb8e8),day);
-  scene.background=sky;scene.fog.color.copy(sky);scene.fog.near=dist*.8+600;scene.fog.far=dist*14+7000;
-  hemi.intensity=.38+.55*day;sun.intensity=.28+.65*day;sun.color.set(day>.3?0xffffff:0x8fa8ff);
+  scene.background=sky;if(scene.fog){scene.fog.color.copy(sky);scene.fog.near=dist*.8+600;scene.fog.far=dist*14+7000}
+  hemi.intensity=(.38+.55*day)*Math.PI;sun.intensity=(.28+.65*day)*Math.PI;sun.color.set(day>.3?0xffffff:0x8fa8ff);
   gtex.offset.x=O/200;stars.material.opacity=clamp(night*1.2-.1,0,1);stars.position.copy(cam.position);
-  [T.a,T.b].forEach(tr=>{if(tr.glow){tr.glow.opacity=.12+.88*night;tr.spot.intensity=night>.05?3*night+.2:0}})}
+  [T.a,T.b].forEach(tr=>{if(tr.glow){tr.glow.opacity=.12+.88*night;tr.spot.intensity=night>.05?(3*night+.2)*60:0}})}
 
 // ---------- UI ----------
 let t=nowMin(),playing=true,speed=1/60,last=performance.now();
@@ -389,7 +495,7 @@ function applyLive(first){const A=NT.a,B=NT.b;
   [$("fa"),$("fb")].forEach((b,i)=>b.textContent="Follow "+(i?T.b.num:T.a.num));$("hornA").textContent="Horn "+T.a.num;$("hornB").textContent="Horn "+T.b.num;
   if(first)SND.honked={a:new Set(),b:new Set()};
   const[t0,t1]=window_();tl.min=Math.floor(t0-60);tl.max=Math.ceil(t1+60);
-  upd();if(first){setCam("both");$("live").click()}}
+  upd();if(first){GEO.route=null;GEO.on=false;GEO.win=null;applyRealMode();$("real").checked=false;geoStatus("Off. Paste your Cesium ion token, then tick the box.");setCam("both");$("live").click()}}
 
 // ---------- live feed ----------
 const want={as:"",bs:""};
@@ -427,29 +533,33 @@ setInterval(()=>{if(NT)applyLive(false)},15000);   // re-anchor to the clock bet
 function frame(now){
   const dt=(now-last)/1000;last=now;if(playing)t+=dt*speed;
   tl.value=t;
-  {const dx=ctl.target.x;if(dx){O+=dx;cam.position.x-=dx;ctl.target.x=0}}   // floating origin
+  const real=!!(GEO.on&&GEO.route);
+  if(real)geoKeepFrame();else{const dx=ctl.target.x;if(dx){O+=dx;cam.position.x-=dx;ctl.target.x=0}}   // floating origin
   const dist=cam.position.distanceTo(ctl.target);cam.near=clamp(dist/400,.3,3000);cam.updateProjectionMatrix();
   envUpdate(dist);
   $("clock").textContent=fmt(t)+" IST"+(Math.abs(t-nowMin())<2?"  · LIVE":"");
   const far=dist>20000;
-  trackG.visible=catG.visible=treeG.visible=!far;ground.visible=dist<150000;
+  trackG.visible=catG.visible=treeG.visible=!far&&!real;ground.visible=real?!GEO.tilesOK:dist<150000;farGround.visible=!real;
   trackG.position.x=Math.round(O/SP)*SP-O;catG.position.x=Math.round(O/MS)*MS-O;treeG.position.x=Math.round(O/TP)*TP-O;
   const have=T.a.stops.length&&T.b.stops.length&&T.a.g&&T.b.g;
   if(have){
     const pa=pos(T.a,t),pb=pos(T.b,t);
     $("st1").innerHTML=statusText(T.a,pa);$("st2").innerHTML=statusText(T.b,pb);
     const lo=Math.min(T.a.stops[0].ch,T.b.stops[0].ch),hi=Math.max(T.a.stops[T.a.stops.length-1].ch,T.b.stops[T.b.stops.length-1].ch);
-    const rs=clamp(dist/2500,1,200);routeLine.visible=dist>4000;routeLine.scale.set(X(hi-lo),rs,rs);routeLine.position.set(X((lo+hi)/2)-O,.15*rs,0);
-    [...STN].forEach(st=>{const rx=X(st.km)-O;st.g.position.x=rx;st.g.visible=Math.abs(rx)<20000;
+    const rs=clamp(dist/2500,1,200);routeLine.visible=dist>4000&&!real;routeLine.scale.set(X(hi-lo),rs,rs);routeLine.position.set(X((lo+hi)/2)-O,.15*rs,0);
+    if(real){[...STN].forEach(st=>{const w=geoAt(st.km),h=geoHeight("s"+st.code,w.pos,w.up,2000),d=cam.position.distanceTo(w.pos),sc=clamp(d*.05,12,40000);
+        st.g.visible=false;st.lab.position.copy(w.pos).addScaledVector(w.up,h+20+d*.03);st.lab.scale.set(sc*4,sc*.75,1);st.lab.visible=d>200});
+      MINI.forEach(m=>{m.g.visible=false})}
+    else{[...STN].forEach(st=>{const rx=X(st.km)-O;st.g.position.x=rx;st.g.visible=Math.abs(rx)<20000;
       const d=Math.hypot(rx-cam.position.x,cam.position.y,cam.position.z),sc=clamp(d*.05,12,40000);
       st.lab.position.set(rx,20+d*.03,-10);st.lab.scale.set(sc*4,sc*.75,1);st.lab.visible=d>200});
-    MINI.forEach(m=>{const rx=X(m.km)-O;m.g.position.x=rx;m.g.visible=Math.abs(rx)<5000});
+    MINI.forEach(m=>{const rx=X(m.km)-O;m.g.position.x=rx;m.g.visible=Math.abs(rx)<5000})}
     [[T.a,pa,pb],[T.b,pb,pa]].forEach(([tr,p,o])=>{
       tr.g.visible=true;
       // a halted train steps onto the loop line when the other train is closing in behind it
       const behind=o.c<p.c&&p.c-o.c<60&&o.st=="run";const want_=(p.st=="halt"&&behind)?4.6:0;
       tr.z+=(want_-tr.z)*Math.min(1,dt*2);
-      tr.g.position.set(X(p.c)-O,0,tr.z);
+      if(real)geoPlace(tr,p);else{tr.g.position.set(X(p.c)-O,0,tr.z);tr.g.quaternion.identity();tr.fwd=null}
       const d=cam.position.distanceTo(tr.g.position);
       tr.detail.visible=d<9000;
       tr.marker.visible=d>2500;const H=d*.005,b=tr.marker.userData.b;b.scale.set(d*.02,H,H);b.position.set(-d*.01,H/2+.8,0);
@@ -463,7 +573,18 @@ function frame(now){
       $("gap").innerHTML=`Gap: <b>${fmtD(ak)}</b> — ${rear.num} is behind ${lead.num} &nbsp;<small>(${(ak/Math.max(1,(pa.v+pb.v)/2)*60).toFixed(0)} min at current speeds)</small>`}
     else{$("dist").style.display="none";$("gap").innerHTML="No shared route — distance unavailable"}
   }
-  ctl.update();renderer.render(scene,cam);requestAnimationFrame(frame)}
+  ctl.update();if(GEO.tiles&&real){cam.updateMatrixWorld();GEO.tiles.update();if((GEO.rr=(GEO.rr+1)%30)==0)geoAttrib()}
+  renderer.render(scene,cam);requestAnimationFrame(frame)}
+
+// ---------- real landscape controls ----------
+try{$("ion").value=localStorage.getItem("ionToken")||""}catch(e){}
+function toggleReal(){
+  if(!$("real").checked){GEO.on=false;applyRealMode();geoStatus("Off");setCam("both");return}
+  if(!PAIR.ok){geoStatus("Load two trains with a shared route first.");$("real").checked=false;return}
+  const tok=$("ion").value.trim();if(tok)geoInitTiles(tok);else geoStatus("No Cesium token yet — the route will be traced but the ground stays plain.");
+  geoRequest(O/1000+ctl.target.x/1000)}
+$("real").onchange=toggleReal;
+$("ionsave").onclick=()=>{try{localStorage.setItem("ionToken",$("ion").value.trim())}catch(e){}geoStatus("Token saved in this browser only.");if($("real").checked&&$("ion").value.trim())geoInitTiles($("ion").value.trim())};
 
 // ---------- start ----------
 (function init(){
@@ -518,10 +639,10 @@ function synthHorn(k,len){const ctx=SND.ctx,v=SND.tr[k],n=ctx.currentTime,g=ctx.
 function sndFrame(dt,P){if(!SND.on||!SND.ctx)return;const ctx=SND.ctx,now=ctx.currentTime,m=cam.matrixWorld.elements,right=new THREE.Vector3(m[0],m[1],m[2]);
   for(const k of["a","b"]){const tr=T[k],p=P[k],v=SND.tr[k];
     const ms=(playing&&p.st=="run")?p.v/3.6:0,sf=clamp(ms/36,0,1);
-    const gx=tr.g.position.x,px=clamp(cam.position.x,gx-tr.len,gx),pt=new THREE.Vector3(px,1.5,tr.z);
+    const fw=tr.fwd||new THREE.Vector3(1,0,0),al=clamp(cam.position.clone().sub(tr.g.position).dot(fw),-tr.len,0),pt=tr.g.position.clone().addScaledVector(fw,al);pt.y+=1.5;
     const d=Math.max(5,cam.position.distanceTo(pt)),att=1/(1+Math.pow(d/80,1.3));v.att=att;
     v.hornAtt=1/(1+Math.pow(d/350,1.3));const dir=pt.clone().sub(cam.position).divideScalar(d),toL=dir.clone().multiplyScalar(-1);
-    const vr=ms*toL.x,dop=clamp(343/(343-clamp(vr,-60,60)),.85,1.18);v.dop=dop;       // source speed toward the listener
+    const vr=ms*toL.dot(fw),dop=clamp(343/(343-clamp(vr,-60,60)),.85,1.18);v.dop=dop;       // source speed toward the listener
     v.pan.pan.setTargetAtTime(clamp(dir.dot(right),-1,1),now,.05);
     v.lp.frequency.setTargetAtTime(500+19000*Math.pow(att,.7),now,.1);
     const rec=!!trackBuf;if(rec&&!v.track)trackLoop(v);
@@ -552,4 +673,5 @@ addEventListener("keydown",e=>{if(e.target.tagName=="INPUT"||e.target.tagName=="
   if(!SND.tr.a||!SND.tr.b)return;hornKey=SND.tr.a.att>=SND.tr.b.att?"a":"b";hornStart(hornKey)});
 addEventListener("keyup",e=>{if((e.key=="h"||e.key=="H")&&hornKey){hornStop(hornKey);hornKey=null}});
 
+window.__app={geoBuild,geoFrame,applyRealMode,geoAt,GEO,T,get PAIR(){return PAIR},get STN(){return STN},get MINI(){return MINI},cam,ctl,scene,renderer,SND,pos,get t(){return t},setCam};
 </script></body></html>
