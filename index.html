@@ -393,14 +393,24 @@ async function geoRequest(cCenter){
   if(sts.length<2){GEO.busy=false;geoStatus("No stations found around this train to trace a route from.");return}
   const q="/api/route?s="+sts.map(s=>s.code+":"+s.km).join(","),t0=Date.now();
   try{for(;;){const r=await fetch(q,{cache:"no-store"}),j=await r.json();
-      if(j.state=="done"){GEO.route=geoBuild(j.result);GEO.win=[lo,hi];geoFrame(clamp(cCenter,GEO.route.lo,GEO.route.hi));GEO.on=true;applyRealMode();setCam(GEO.focus||"both");
+      if(j.state=="done"){GEO.route=geoBuild(j.result);GEO.win=[lo,hi];geoFrame(clamp(cCenter,GEO.route.lo,GEO.route.hi));GEO.on=true;applyRealMode();realStations();setCam(GEO.focus||"both");
         geoStatus("Route: real track traced ("+(GEO.route.P.length)+" points, "+Math.round(GEO.route.S[GEO.route.S.length-1]/1000)+" km)");if(!GEO.tiles)geoStatus("Tiles: no Cesium token — plain ground","tiles");break}
       if(j.state=="error"){geoStatus("Could not trace the route: "+j.msg);break}
       geoStatus(`${j.msg||"working…"} (${Math.round((Date.now()-t0)/1000)} s — the first time for a stretch can take a few minutes)`);
       await new Promise(r=>setTimeout(r,4000));if(!$("real").checked)break}}
   catch(e){geoStatus("Route request failed: "+e.message)}
   GEO.busy=false}
-function applyRealMode(){const real=GEO.on&&GEO.route;scene.fog=real?null:FOG;if(!real){$("attr").innerHTML=""}}
+let REALST=[];const Y_=new THREE.Vector3(0,1,0);
+function realStations(){REALST.forEach(x=>{scene.remove(x.lab);scene.remove(x.pin)});REALST=[];
+  if(!(GEO.route&&NT))return;const seen=new Set();
+  for(const r of NT.a.rows){if(r.k!="stop"&&r.k!="pass")continue;if(r.km<GEO.route.lo-2||r.km>GEO.route.hi+2||seen.has(r.code))continue;seen.add(r.code);
+    const stop=r.k=="stop",name=tc(r.name),lab=label(name.toUpperCase(),stop?"#ffe08a":"#c9d4e0"),
+      g=new THREE.CylinderGeometry(.5,.5,1,6);g.translate(0,.5,0);const pin=new THREE.Mesh(g,MB(stop?0xffc533:0x9aa7b8));
+    scene.add(lab,pin);REALST.push({code:r.code,name,km:r.km,stop,lab,pin})}
+  $("stsel").innerHTML='<option value="">Go to station…</option>'+REALST.map(x=>`<option value="${x.code}">${x.stop?"● ":"   "}${x.name}${x.stop?" (stops)":""}</option>`).join("")}
+function realStationsOff(){REALST.forEach(x=>{x.lab.visible=false;x.pin.visible=false});
+  $("stsel").innerHTML='<option value="">Go to station…</option>'+STN.map(x=>`<option value="${x.code}">${x.name}</option>`).join("")}
+function applyRealMode(){const real=GEO.on&&GEO.route;scene.fog=real?null:FOG;if(!real){$("attr").innerHTML="";realStationsOff()}}
 function setO(c){if(GEO.on&&GEO.route)geoFrame(clamp(c,GEO.route.lo-20,GEO.route.hi+20));else O=X(c)}
 // per-frame: keep the frame near what the camera is looking at, and fetch more route when it moves outside the traced window
 function geoKeepFrame(){
@@ -421,7 +431,7 @@ function setCam(m){follow=null;
   const pa=pos(T.a,t),pb=pos(T.b,t);
   if(m=="over"){const span=Math.max(3000,PAIR.ok?(PAIR.hi-PAIR.lo)*1000:300000);setO(PAIR.ok?(PAIR.lo+PAIR.hi)/2:(pa.c+pb.c)/2);cam.position.set(0,span*.46,span*.6);ctl.target.set(0,0,0)}
   else if(m=="both"){follow="both";const gap=Math.abs(pa.c-pb.c)*1000;setO((pa.c+pb.c)/2);cam.position.set(0,Math.max(60,gap*.7),Math.max(120,gap*1.3));ctl.target.set(0,0,0)}
-  else if(m.startsWith("st:")){const s=[...STN,...MINI].find(x=>x.code==m.slice(3));if(s){setO(s.km);cam.position.set(-130,14,62);ctl.target.set(0,2,-3)}}
+  else if(m.startsWith("st:")){const s=[...REALST,...STN,...MINI].find(x=>x.code==m.slice(3));if(s){setO(s.km);cam.position.set(-130,14,62);ctl.target.set(0,2,-3)}}
   else{follow=m;setO(pos(T[m],t).c);cam.position.set(16,6,18);ctl.target.set(-10,2.5,0)}}
 function resize(){const w=view.clientWidth,h=view.clientHeight;renderer.setSize(w,h);cam.aspect=w/h;cam.updateProjectionMatrix();if(GEO.tiles)GEO.tiles.setResolutionFromRenderer(cam,renderer)}
 addEventListener("resize",resize);resize();
@@ -437,13 +447,14 @@ function groundPoint(e){ray.setFromCamera(ndc(e),cam);
     if(h&&h.length){lastGP={t:n,x:e.clientX,y:e.clientY,P:h[0].point.clone()};return lastGP.P.clone()}
     return null}                                   // no hit / ray-casts backed off: zoom toward the view centre instead
   const P=new THREE.Vector3();return ray.ray.intersectPlane(gnd,P)?P:null}
+let zoomPend=0,zoomP=null;
 function zoomBy(k,P){P=P||ctl.target.clone();const c=cam.position.clone(),tg=ctl.target.clone();
   const nc=P.clone().add(c.sub(P).multiplyScalar(k)),nt=P.clone().add(tg.sub(P).multiplyScalar(k));
-  const d=nc.distanceTo(nt);if(d<3&&k<1)return;if(d>900000&&k>1)return;
-  if(!(GEO.on&&GEO.tilesOK)&&nc.y<1.5)nc.y=1.5;cam.position.copy(nc);ctl.target.copy(nt)}
+  const d=nc.distanceTo(nt);if(d<3&&k<1)return false;if(d>900000&&k>1)return false;
+  if(!(GEO.on&&GEO.tilesOK)&&nc.y<1.5)nc.y=1.5;cam.position.copy(nc);ctl.target.copy(nt);return true}
 renderer.domElement.addEventListener("wheel",e=>{e.preventDefault();
   const k=Math.exp(clamp(e.deltaY,-200,200)*.004);
-  let P=null;if(follow=="both"){follow=null}else if(!follow)P=groundPoint(e);zoomBy(k,P)},{passive:false});
+  let P=null;if(follow=="both"){follow=null}else if(!follow)P=groundPoint(e);zoomPend=clamp(zoomPend+Math.log(k),-4,4);zoomP=P},{passive:false});
 renderer.domElement.addEventListener("dblclick",e=>{ray.setFromCamera(ndc(e),cam);
   for(const k of["a","b"]){const tr=T[k];if(tr.g&&ray.intersectObjects([tr.detail,tr.marker],true).length){setCam(k);return}}
   const P=groundPoint(e);if(P){follow=null;const d=P.clone().sub(ctl.target);ctl.target.add(d);cam.position.add(d)}});
@@ -568,9 +579,11 @@ function frame(now){
     $("st1").innerHTML=statusText(T.a,pa);$("st2").innerHTML=statusText(T.b,pb);
     const lo=Math.min(T.a.stops[0].ch,T.b.stops[0].ch),hi=Math.max(T.a.stops[T.a.stops.length-1].ch,T.b.stops[T.b.stops.length-1].ch);
     const rs=clamp(dist/2500,1,200);routeLine.visible=dist>4000&&!real;routeLine.scale.set(X(hi-lo),rs,rs);routeLine.position.set(X((lo+hi)/2)-O,.15*rs,0);
-    if(real){[...STN].forEach(st=>{if(st.km<GEO.route.lo-20||st.km>GEO.route.hi+20){st.lab.visible=false;st.g.visible=false;return}const w=geoAt(st.km),h=geoHeight("s"+st.code,w.pos,w.up,2000),d=cam.position.distanceTo(w.pos),sc=clamp(d*.05,12,40000);
-        st.g.visible=false;st.lab.position.copy(w.pos).addScaledVector(w.up,h+20+d*.03);st.lab.scale.set(sc*4,sc*.75,1);st.lab.visible=d>200});
-      MINI.forEach(m=>{m.g.visible=false})}
+    if(real){STN.forEach(st=>{st.g.visible=false;st.lab.visible=false});MINI.forEach(m=>{m.g.visible=false});
+      REALST.forEach(x=>{const w=geoAt(x.km),h=geoHeight("r"+x.code,w.pos,w.up,2500),pos=w.pos.clone().addScaledVector(w.up,h),d=cam.position.distanceTo(pos),
+          H=clamp(d*.03,35,4000),wd=clamp(d*.004,1,200),sc=clamp(d*.05,12,40000);
+        x.pin.visible=x.stop||d<25000;x.pin.position.copy(pos);x.pin.scale.set(wd,H,wd);x.pin.quaternion.setFromUnitVectors(Y_,w.up);
+        x.lab.visible=x.stop?d>60:(d<25000&&d>60);x.lab.position.copy(pos).addScaledVector(w.up,H+sc*.4);x.lab.scale.set(sc*4,sc*.75,1)})}
     else{[...STN].forEach(st=>{const rx=X(st.km)-O;st.g.position.x=rx;st.g.visible=Math.abs(rx)<20000;
       const d=Math.hypot(rx-cam.position.x,cam.position.y,cam.position.z),sc=clamp(d*.05,12,40000);
       st.lab.position.set(rx,20+d*.03,-10);st.lab.scale.set(sc*4,sc*.75,1);st.lab.visible=d>200});
@@ -594,6 +607,7 @@ function frame(now){
       $("gap").innerHTML=`Gap: <b>${fmtD(ak)}</b> — ${rear.num} is behind ${lead.num} &nbsp;<small>(${(ak/Math.max(1,(pa.v+pb.v)/2)*60).toFixed(0)} min at current speeds)</small>`}
     else{$("dist").style.display="none";$("gap").innerHTML="No shared route — distance unavailable"}
   }
+  if(Math.abs(zoomPend)>.002){const f=zoomPend*.28;if(zoomBy(Math.exp(f),zoomP))zoomPend-=f;else zoomPend=0}else zoomPend=0;
   ctl.update();if(GEO.tiles&&real){cam.updateMatrixWorld();GEO.tiles.update();if((GEO.rr=(GEO.rr+1)%30)==0)geoAttrib()}
   renderer.render(scene,cam);requestAnimationFrame(frame)}
 
