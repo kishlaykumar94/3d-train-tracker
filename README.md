@@ -14,12 +14,12 @@ python server.py        # then open http://localhost:8765/   (or double-click st
 Python 3.8+, no packages to install.
 
 ## Real landscape (optional)
-0. Once: `python fetch_rail_data.py` downloads India's railway lines from OpenStreetMap (HOT export, about 13 MB download / 24 MB on disk, saved to `data/`, not committed). Tracks are then traced instantly and offline. Without it the server falls back to the public Overpass servers, which are slow and often busy.
+0. Once: `python fetch_rail_data.py` downloads India's railway lines from OpenStreetMap (HOT export, about 13 MB download / 24 MB on disk) and DataMeet's station list (2 MB, station code to coordinates), saved to `data/` (not committed). Tracks are then traced instantly and offline. Without it the server falls back to the public Overpass servers, which are slow and often busy.
 1. Make a free account at [cesium.com](https://cesium.com/ion/) and create an access token.
 2. Paste it into **Real landscape** in the side panel and press **Save** (it is stored only in your browser's local storage).
 3. Load two trains, tick **Real Google Earth landscape**.
 
-What happens: the server looks up the train's stations in OpenStreetMap by station code (a tiny query, cached in `geo_cache.json`) and traces the railway line between them
+What happens: the server looks up the train's stations by station code (local station list; for the few it lacks, a small OpenStreetMap query, cached in `geo_cache.json`) and traces the railway line between them
 through the local railway data (`geo.py`, `railnet.py`). The trains then follow that real line and the 3D tiles are placed under them, with the ground
 height found by ray-casting the tiles. The route is built from train A's own stations, so it works wherever train A is on its journey.
 
@@ -37,4 +37,4 @@ Notes
 - Live positions are NTES's last confirmed location plus extrapolation, not GPS.
 - Sounds: `assets/horn.mp3`, `assets/track.mp3` (replace them to change the sounds).
 
-Data: railway lines (c) OpenStreetMap contributors, ODbL, exported by the Humanitarian OpenStreetMap Team (data as of Jan 2025).
+Data: railway lines (c) OpenStreetMap contributors, ODbL, exported by the Humanitarian OpenStreetMap Team (data as of Jan 2025); station list from DataMeet (github.com/datameet/railways).

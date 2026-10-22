@@ -69,6 +69,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:2px 4px;t
 {"imports":{
  "three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
  "three/examples/jsm/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+ "three-mesh-bvh":"https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.8.3/src/index.js",
  "3d-tiles-renderer":"https://cdn.jsdelivr.net/npm/3d-tiles-renderer@0.4.14/src/index.js",
  "3d-tiles-renderer/plugins":"https://cdn.jsdelivr.net/npm/3d-tiles-renderer@0.4.14/src/three/plugins/index.js",
  "3d-tiles-renderer/core/plugins":"https://cdn.jsdelivr.net/npm/3d-tiles-renderer@0.4.14/src/core/plugins/index.js"
@@ -354,8 +355,11 @@ function geoNearestC(w){const r=GEO.route,e=GEO.P0.clone().addScaledVector(GEO.T
   return cOf(r,r.S[best])}
 // ground height under a world position (metres above the local ellipsoid plane), found by ray-casting the loaded tiles
 const gRay=new THREE.Raycaster();gRay.firstHitOnly=true;
+let rayBackoff=0;                                  // performance.now() until which tile ray-casts are skipped because they were slow
+function rayTiles(ray){if(performance.now()<rayBackoff)return null;const t0=performance.now();const h=ray.intersectObject(GEO.tiles.group,true);
+  if(performance.now()-t0>20)rayBackoff=performance.now()+4000;return h}
 function geoGround(pos,up){if(!GEO.tiles||!GEO.tilesOK)return null;gRay.set(pos.clone().addScaledVector(up,3000),up.clone().negate());gRay.far=6000;
-  const h=gRay.intersectObject(GEO.tiles.group,true);return h.length?3000-h[0].distance:null}
+  const h=rayTiles(gRay);return h&&h.length?3000-h[0].distance:null}
 function geoHeight(key,pos,up,every){const c=GEO.hc[key]||(GEO.hc[key]={h:0,t:-1e9,ok:false}),n=performance.now();
   if(n-c.t>every){c.t=n;const h=geoGround(pos,up);if(h!=null){c.h+=(h-c.h)*(c.ok?.5:1);c.ok=true}}return c.h}
 
@@ -367,6 +371,10 @@ async function geoInitTiles(token){
     const tiles=new TilesRenderer();
     tiles.registerPlugin(new CesiumIonAuthPlugin({apiToken:token,assetId:"2275207",autoRefreshToken:true}));
     tiles.registerPlugin(new GLTFExtensionsPlugin({dracoLoader:new DRACOLoader().setDecoderPath("https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/")}));
+    try{const bvh=await import("three-mesh-bvh");THREE.BufferGeometry.prototype.computeBoundsTree=bvh.computeBoundsTree;THREE.BufferGeometry.prototype.disposeBoundsTree=bvh.disposeBoundsTree;THREE.Mesh.prototype.raycast=bvh.acceleratedRaycast;
+      tiles.addEventListener("load-model",e=>e.scene.traverse(c=>{if(c.isMesh&&c.geometry&&!c.geometry.boundsTree){try{c.geometry.computeBoundsTree()}catch(x){}}}));
+      tiles.addEventListener("dispose-model",e=>e.scene.traverse(c=>{if(c.geometry&&c.geometry.boundsTree)try{c.geometry.disposeBoundsTree()}catch(x){}}))}
+    catch(x){GEO.noBvh=true}
     tiles.setCamera(cam);tiles.setResolutionFromRenderer(cam,renderer);tiles.errorTarget=8;tiles.group.matrixAutoUpdate=false;
     tiles.addEventListener("load-error",e=>{geoStatus("Tiles: error loading ("+(e.error&&e.error.message||"check that the Cesium ion token is correct and allows asset 2275207")+")","tiles")});
     tiles.addEventListener("load-tile-set",()=>{GEO.tilesOK=true;geoStatus("Tiles: Google 3D tiles loading ✓","tiles")});
@@ -398,6 +406,10 @@ function setO(c){if(GEO.on&&GEO.route)geoFrame(clamp(c,GEO.route.lo-20,GEO.route
 function geoKeepFrame(){
   const c=geoNearestC(ctl.target),s=sOf(GEO.route,c);if(Math.abs(s-GEO.s0)>2500)geoReanchor(c);
   if(GEO.win&&GEO.rng&&(c<GEO.win[0]+10&&GEO.win[0]>GEO.rng[0]+1||c>GEO.win[1]-10&&GEO.win[1]<GEO.rng[1]-1))geoRequest(c)}
+let camClampT=0;
+function geoKeepAbove(){if(!GEO.tilesOK||performance.now()-camClampT<100)return;camClampT=performance.now();
+  gRay.set(new THREE.Vector3(cam.position.x,cam.position.y+3000,cam.position.z),new THREE.Vector3(0,-1,0));gRay.far=6000+Math.abs(cam.position.y);
+  const h=rayTiles(gRay);if(h&&h.length){const gy=h[0].point.y+2.5;if(cam.position.y<gy){const dy=gy-cam.position.y;cam.position.y+=dy}}}
 function geoPlace(tr,p){if(p.c<GEO.route.lo-100||p.c>GEO.route.hi+100){tr.g.visible=false;return}   // not on the traced stretch
   const w=geoAt(p.c),h=geoHeight(tr.key,w.pos,w.up,250);
   const right=new THREE.Vector3().crossVectors(w.fwd,w.up).normalize(),up=new THREE.Vector3().crossVectors(right,w.fwd).normalize();
@@ -417,12 +429,18 @@ addEventListener("resize",resize);resize();
 // ---- zoom: exponential, toward the cursor; double-click focuses a train or re-centres the view ----
 const ray=new THREE.Raycaster(),gnd=new THREE.Plane(new THREE.Vector3(0,1,0),0);
 function ndc(e){const r=renderer.domElement.getBoundingClientRect();return new THREE.Vector2((e.clientX-r.left)/r.width*2-1,-((e.clientY-r.top)/r.height*2-1))}
-function groundPoint(e){ray.setFromCamera(ndc(e),cam);if(GEO.on&&GEO.tilesOK){ray.firstHitOnly=true;const h=ray.intersectObject(GEO.tiles.group,true);if(h.length)return h[0].point.clone()}
+let lastGP=null;
+function groundPoint(e){ray.setFromCamera(ndc(e),cam);
+  if(GEO.on&&GEO.tilesOK){const n=performance.now();
+    if(lastGP&&n-lastGP.t<80&&Math.abs(e.clientX-lastGP.x)<20&&Math.abs(e.clientY-lastGP.y)<20)return lastGP.P.clone();
+    ray.firstHitOnly=true;const h=rayTiles(ray);
+    if(h&&h.length){lastGP={t:n,x:e.clientX,y:e.clientY,P:h[0].point.clone()};return lastGP.P.clone()}
+    return null}                                   // no hit / ray-casts backed off: zoom toward the view centre instead
   const P=new THREE.Vector3();return ray.ray.intersectPlane(gnd,P)?P:null}
 function zoomBy(k,P){P=P||ctl.target.clone();const c=cam.position.clone(),tg=ctl.target.clone();
   const nc=P.clone().add(c.sub(P).multiplyScalar(k)),nt=P.clone().add(tg.sub(P).multiplyScalar(k));
-  const d=nc.distanceTo(nt);if(d<4&&k<1)return;if(d>900000&&k>1)return;
-  if(nc.y<1.5)nc.y=1.5;cam.position.copy(nc);ctl.target.copy(nt)}
+  const d=nc.distanceTo(nt);if(d<3&&k<1)return;if(d>900000&&k>1)return;
+  if(!(GEO.on&&GEO.tilesOK)&&nc.y<1.5)nc.y=1.5;cam.position.copy(nc);ctl.target.copy(nt)}
 renderer.domElement.addEventListener("wheel",e=>{e.preventDefault();
   const k=Math.exp(clamp(e.deltaY,-200,200)*.004);
   let P=null;if(follow=="both"){follow=null}else if(!follow)P=groundPoint(e);zoomBy(k,P)},{passive:false});
@@ -537,7 +555,7 @@ function frame(now){
   const dt=(now-last)/1000;last=now;if(playing)t+=dt*speed;
   tl.value=t;
   const real=!!(GEO.on&&GEO.route);
-  if(real)geoKeepFrame();else{const dx=ctl.target.x;if(dx){O+=dx;cam.position.x-=dx;ctl.target.x=0}}   // floating origin
+  if(real){geoKeepFrame();geoKeepAbove()}else{const dx=ctl.target.x;if(dx){O+=dx;cam.position.x-=dx;ctl.target.x=0}}   // floating origin
   const dist=cam.position.distanceTo(ctl.target);cam.near=clamp(dist/400,.3,3000);cam.updateProjectionMatrix();
   envUpdate(dist);
   $("clock").textContent=fmt(t)+" IST"+(Math.abs(t-nowMin())<2?"  · LIVE":"");

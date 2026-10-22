@@ -39,12 +39,12 @@ def save():
         os.replace(tmp, CACHE_FILE)
 
 
-def overpass(q, tries=6):
+def overpass(q, tries=6, timeout=75):
     """Run an Overpass query, rotating through mirrors with back-off. Returns parsed JSON or None."""
     for i in range(tries):
         base = MIRRORS[i % len(MIRRORS)]
         try:
-            r = subprocess.run(["curl", "-s", "--max-time", "75", "-A", UA, "--data-urlencode", "data=" + q, base],
+            r = subprocess.run(["curl", "-s", "--max-time", str(timeout), "-A", UA, "--data-urlencode", "data=" + q, base],
                                capture_output=True)
             o = r.stdout.decode("utf-8", "ignore")
             if o.lstrip().startswith("{"):
@@ -67,21 +67,52 @@ def hav(a, b):
     return 2 * R * math.asin(math.sqrt(h))
 
 
+_local = None
+
+
+def local_stations():
+    """code -> [lat, lon] from data/stations.json (DataMeet's list of Indian Railways stations), if present."""
+    global _local
+    if _local is None:
+        _local = {}
+        try:
+            for f in json.load(open(os.path.join(HERE, "data", "stations.json"), encoding="utf-8"))["features"]:
+                g, p = f.get("geometry"), f.get("properties", {})
+                if g and p.get("code"):
+                    _local[p["code"]] = [g["coordinates"][1], g["coordinates"][0]]
+        except Exception:
+            pass
+    return _local
+
+
 def station_coords(codes):
+    """Station lat/lon by code from OpenStreetMap (ref tag). Small queries run in parallel across the Overpass mirrors,
+    and whatever is found is used - a few missing stations don't stop the route."""
     c = cache()["stations"]
+    loc = local_stations()
+    for x in codes:                                   # local station list first: instant, offline
+        if x not in c and x in loc:
+            c[x] = loc[x]
     need = [x for x in codes if x not in c]
-    for i in range(0, len(need), 40):
-        chunk = need[i:i + 40]
+    chunks = [need[i:i + 10] for i in range(0, len(need), 10)]
+
+    def one(chunk):
         rx = "^(" + "|".join(re.escape(x) for x in chunk) + ")$"
-        d = overpass(f'[out:json][timeout:60];(nwr["railway"~"^(station|halt)$"]["ref"~"{rx}"](6.0,68.0,37.5,98.0););out center tags;')
+        d = overpass(f'[out:json][timeout:40];(nwr["railway"~"^(station|halt)$"]["ref"~"{rx}"](6.0,68.0,37.5,98.0););out center tags;', tries=2, timeout=12)
         if d is None:
-            continue
+            return
         for e in d["elements"]:
             ref = e.get("tags", {}).get("ref")
             ctr = e if "lat" in e else e.get("center")
             if ref in chunk and ctr and ref not in c:
                 c[ref] = [ctr["lat"], ctr["lon"]]
-    save()
+
+    ths = [threading.Thread(target=one, args=(ch,)) for ch in chunks]
+    for i in range(0, len(ths), 4):                 # at most 4 queries in flight at once
+        [t.start() for t in ths[i:i + 4]]
+        [t.join() for t in ths[i:i + 4]]
+    if need:
+        save()
     return {x: c[x] for x in codes if x in c}
 
 
