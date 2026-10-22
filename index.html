@@ -378,12 +378,14 @@ function geoAttrib(){if(!GEO.tiles)return;const a=[];try{GEO.tiles.getAttributio
 
 // route from the server (OpenStreetMap lookups run there and are cached; first use of a stretch can take minutes)
 async function geoRequest(cCenter){
-  if(GEO.busy||!PAIR.ok)return;GEO.busy=true;
-  const lo=Math.max(PAIR.lo,cCenter-80),hi=Math.min(PAIR.hi,cCenter+80),sts=PAIR.stations.filter(s=>s.km>=lo&&s.km<=hi);
-  if(sts.length<2){GEO.busy=false;geoStatus("No shared stations around the camera to trace a route from.");return}
+  if(GEO.busy||!NT)return;GEO.busy=true;
+  const rowsA=NT.a.rows.filter(r=>r.k=="stop"||r.k=="pass"),kmMin=Math.min(...rowsA.map(r=>r.km)),kmMax=Math.max(...rowsA.map(r=>r.km));GEO.rng=[kmMin,kmMax];
+  const lo=Math.max(kmMin,cCenter-80),hi=Math.min(kmMax,cCenter+80),seen=new Set(),sts=[];
+  for(const r of rowsA)if(r.km>=lo&&r.km<=hi&&!seen.has(r.code)){seen.add(r.code);sts.push({code:r.code,km:r.km})}
+  if(sts.length<2){GEO.busy=false;geoStatus("No stations found around this train to trace a route from.");return}
   const q="/api/route?s="+sts.map(s=>s.code+":"+s.km).join(","),t0=Date.now();
   try{for(;;){const r=await fetch(q,{cache:"no-store"}),j=await r.json();
-      if(j.state=="done"){GEO.route=geoBuild(j.result);GEO.win=[lo,hi];geoFrame(clamp(cCenter,GEO.route.lo,GEO.route.hi));GEO.on=true;applyRealMode();
+      if(j.state=="done"){GEO.route=geoBuild(j.result);GEO.win=[lo,hi];geoFrame(clamp(cCenter,GEO.route.lo,GEO.route.hi));GEO.on=true;applyRealMode();setCam(GEO.focus||"both");
         geoStatus("Route: real track traced ("+(GEO.route.P.length)+" points, "+Math.round(GEO.route.S[GEO.route.S.length-1]/1000)+" km)");if(!GEO.tiles)geoStatus("Tiles: no Cesium token — plain ground","tiles");break}
       if(j.state=="error"){geoStatus("Could not trace the route: "+j.msg);break}
       geoStatus(`${j.msg||"working…"} (${Math.round((Date.now()-t0)/1000)} s — the first time for a stretch can take a few minutes)`);
@@ -395,8 +397,9 @@ function setO(c){if(GEO.on&&GEO.route)geoFrame(clamp(c,GEO.route.lo-20,GEO.route
 // per-frame: keep the frame near what the camera is looking at, and fetch more route when it moves outside the traced window
 function geoKeepFrame(){
   const c=geoNearestC(ctl.target),s=sOf(GEO.route,c);if(Math.abs(s-GEO.s0)>2500)geoReanchor(c);
-  if(GEO.win&&(c<GEO.win[0]+10&&GEO.win[0]>PAIR.lo+1||c>GEO.win[1]-10&&GEO.win[1]<PAIR.hi-1))geoRequest(c)}
-function geoPlace(tr,p){const w=geoAt(p.c),h=geoHeight(tr.key,w.pos,w.up,250);
+  if(GEO.win&&GEO.rng&&(c<GEO.win[0]+10&&GEO.win[0]>GEO.rng[0]+1||c>GEO.win[1]-10&&GEO.win[1]<GEO.rng[1]-1))geoRequest(c)}
+function geoPlace(tr,p){if(p.c<GEO.route.lo-100||p.c>GEO.route.hi+100){tr.g.visible=false;return}   // not on the traced stretch
+  const w=geoAt(p.c),h=geoHeight(tr.key,w.pos,w.up,250);
   const right=new THREE.Vector3().crossVectors(w.fwd,w.up).normalize(),up=new THREE.Vector3().crossVectors(right,w.fwd).normalize();
   tr.g.position.copy(w.pos).addScaledVector(up,h).addScaledVector(right,tr.z);
   tr.g.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(w.fwd,up,right));tr.fwd=w.fwd}
@@ -547,7 +550,7 @@ function frame(now){
     $("st1").innerHTML=statusText(T.a,pa);$("st2").innerHTML=statusText(T.b,pb);
     const lo=Math.min(T.a.stops[0].ch,T.b.stops[0].ch),hi=Math.max(T.a.stops[T.a.stops.length-1].ch,T.b.stops[T.b.stops.length-1].ch);
     const rs=clamp(dist/2500,1,200);routeLine.visible=dist>4000&&!real;routeLine.scale.set(X(hi-lo),rs,rs);routeLine.position.set(X((lo+hi)/2)-O,.15*rs,0);
-    if(real){[...STN].forEach(st=>{const w=geoAt(st.km),h=geoHeight("s"+st.code,w.pos,w.up,2000),d=cam.position.distanceTo(w.pos),sc=clamp(d*.05,12,40000);
+    if(real){[...STN].forEach(st=>{if(st.km<GEO.route.lo-20||st.km>GEO.route.hi+20){st.lab.visible=false;st.g.visible=false;return}const w=geoAt(st.km),h=geoHeight("s"+st.code,w.pos,w.up,2000),d=cam.position.distanceTo(w.pos),sc=clamp(d*.05,12,40000);
         st.g.visible=false;st.lab.position.copy(w.pos).addScaledVector(w.up,h+20+d*.03);st.lab.scale.set(sc*4,sc*.75,1);st.lab.visible=d>200});
       MINI.forEach(m=>{m.g.visible=false})}
     else{[...STN].forEach(st=>{const rx=X(st.km)-O;st.g.position.x=rx;st.g.visible=Math.abs(rx)<20000;
@@ -580,9 +583,11 @@ function frame(now){
 try{$("ion").value=localStorage.getItem("ionToken")||""}catch(e){}
 function toggleReal(){
   if(!$("real").checked){GEO.on=false;applyRealMode();geoStatus("Off");setCam("both");return}
-  if(!PAIR.ok){geoStatus("Load two trains with a shared route first.");$("real").checked=false;return}
-  const tok=$("ion").value.trim();if(tok)geoInitTiles(tok);else geoStatus("No Cesium token yet — the route will be traced but the ground stays plain.");
-  geoRequest(O/1000+ctl.target.x/1000)}
+  if(!NT){geoStatus("Load two trains first.");$("real").checked=false;return}
+  const tok=$("ion").value.trim();if(tok)geoInitTiles(tok);else geoStatus("No Cesium token yet - the route will be traced but the ground stays plain.","tiles");
+  const pa=pos(T.a,t),pb=pos(T.b,t);let foc="a",c=pa.c;
+  if(follow=="b"&&PAIR.ok&&inCorr(pb.c)){foc="b";c=pb.c}
+  GEO.focus=foc;geoRequest(c)}
 $("real").onchange=toggleReal;
 $("ionsave").onclick=()=>{try{localStorage.setItem("ionToken",$("ion").value.trim())}catch(e){}geoStatus("Token saved in this browser only.");if($("real").checked&&$("ion").value.trim())geoInitTiles($("ion").value.trim())};
 

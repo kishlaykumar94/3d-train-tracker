@@ -6,6 +6,7 @@ railway=rail ways. Public Overpass servers are slow and often busy, so everythin
 across mirrors, and cached on disk - the first time a stretch is used it can take a few minutes.
 """
 import json, math, os, re, subprocess, threading, time, heapq, hashlib
+import railnet
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CACHE_FILE = os.path.join(HERE, "geo_cache.json")
@@ -90,22 +91,28 @@ def track_between(pts):
     tc = cache()["tracks"]
     if key in tc:
         return tc[key]
-    around = ",".join(f"{p[0]:.5f},{p[1]:.5f}" for p in pts)
-    d = overpass(f'[out:json][timeout:120];way["railway"="rail"]["service"!~"yard|siding|spur|crossover"](around:700,{around});out geom;')
-    if d is None:
-        return None
-    # graph over way nodes
+    if railnet.available():                              # local copy of India's railways: instant, no network
+        pad = 0.06
+        la, lo = [p[0] for p in pts], [p[1] for p in pts]
+        ways = railnet.ways(min(la) - pad, min(lo) - pad, max(la) + pad, max(lo) + pad)
+    else:                                                # fall back to the public Overpass servers (slow, often busy)
+        around = ",".join(f"{p[0]:.5f},{p[1]:.5f}" for p in pts)
+        d = overpass(f'[out:json][timeout:120];way["railway"="rail"]["service"!~"yard|siding|spur|crossover"](around:700,{around});out geom;')
+        if d is None:
+            return None
+        ways = [[(g["lat"], g["lon"]) for g in w["geometry"]] for w in d["elements"] if w.get("type") == "way" and "geometry" in w]
+    # graph over the line vertices; vertices at the same coordinate are the same node (that is how OSM lines join)
     adj, pos = {}, {}
-    for w in d["elements"]:
-        if w.get("type") != "way" or "geometry" not in w:
-            continue
-        ids, g = w["nodes"], w["geometry"]
-        for nid, p in zip(ids, g):
-            pos[nid] = (p["lat"], p["lon"])
-        for a, b in zip(ids, ids[1:]):
-            L = hav(pos[a], pos[b])
-            adj.setdefault(a, []).append((b, L))
-            adj.setdefault(b, []).append((a, L))
+    for line in ways:
+        prev = None
+        for la_, lo_ in line:
+            nid = (round(la_ * 1e6), round(lo_ * 1e6))
+            pos[nid] = (la_, lo_)
+            if prev is not None and prev != nid:
+                L = hav(pos[prev], pos[nid])
+                adj.setdefault(prev, []).append((nid, L))
+                adj.setdefault(nid, []).append((prev, L))
+            prev = nid
     if not adj:
         return None
     ids = list(pos)

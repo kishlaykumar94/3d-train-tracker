@@ -14,14 +14,14 @@ python server.py        # then open http://localhost:8765/   (or double-click st
 Python 3.8+, no packages to install.
 
 ## Real landscape (optional)
+0. Once: `python fetch_rail_data.py` downloads India's railway lines from OpenStreetMap (HOT export, about 13 MB download / 24 MB on disk, saved to `data/`, not committed). Tracks are then traced instantly and offline. Without it the server falls back to the public Overpass servers, which are slow and often busy.
 1. Make a free account at [cesium.com](https://cesium.com/ion/) and create an access token.
 2. Paste it into **Real landscape** in the side panel and press **Save** (it is stored only in your browser's local storage).
 3. Load two trains, tick **Real Google Earth landscape**.
 
-What happens: the server looks up the shared stations in OpenStreetMap by their station code and traces the railway line between them
-(`geo.py`, cached in `geo_cache.json`). The trains then follow that real line and the 3D tiles are placed under them, with the ground
-height found by ray-casting the tiles. The first time a stretch is used this can take a few minutes because the public Overpass servers are slow and
-often busy; if it fails, untick and tick the box to retry (finished pieces are cached).
+What happens: the server looks up the train's stations in OpenStreetMap by station code (a tiny query, cached in `geo_cache.json`) and traces the railway line between them
+through the local railway data (`geo.py`, `railnet.py`). The trains then follow that real line and the 3D tiles are placed under them, with the ground
+height found by ray-casting the tiles. The route is built from train A's own stations, so it works wherever train A is on its journey.
 
 - Cesium's free Community plan allows 1,000 Google-tile sessions a month and is for non-commercial use. Google's attribution is shown on the map.
 - Real-landscape mode needs the local server (OpenStreetMap lookups are too slow for serverless), so it is not available on the Vercel deployment.
@@ -36,3 +36,5 @@ Notes
   and NTES may refuse requests from some hosting IP ranges - if the deployed site shows "no data" but it works locally, that is the likely cause.
 - Live positions are NTES's last confirmed location plus extrapolation, not GPS.
 - Sounds: `assets/horn.mp3`, `assets/track.mp3` (replace them to change the sounds).
+
+Data: railway lines (c) OpenStreetMap contributors, ODbL, exported by the Humanitarian OpenStreetMap Team (data as of Jan 2025).
